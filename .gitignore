@@ -1,0 +1,15 @@
+
+# Local data and generated outputs
+data/
+results/
+models/
+
+# Large bioinformatics files
+*.h5
+*.h5ad
+*.tar.gz
+*.bam
+*.bai
+*.cloupe
+*.fastq
+*.fastq.gz
