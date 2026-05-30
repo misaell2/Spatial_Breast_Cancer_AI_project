@@ -344,3 +344,18 @@ This project differs by focusing on an end-to-end, portfolio-ready workflow that
 - Planned cloud deployment using AWS
 
 The goal is not only to cluster spatial transcriptomics data, but to build an interpretable and extensible system for automated spatial niche classification.
+
+
+## Reproducibility Notes
+
+Large data files, intermediate `.h5ad` files, trained models, and generated result folders are intentionally excluded from Git tracking.
+
+Ignored local outputs include:
+
+- `data/`
+- `results/`
+- `models/`
+- `.h5ad` files
+- downloaded 10x Genomics data files
+
+Selected lightweight figures and summary tables are copied into `docs/` for GitHub display.
