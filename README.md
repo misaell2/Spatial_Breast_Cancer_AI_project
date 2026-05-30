@@ -114,7 +114,7 @@ Spatial_Breast_Cancer_AI_project/
 ├── data/       # ignored; local raw/processed data
 ├── results/    # ignored; generated analysis outputs
 └── models/     # ignored; trained local model artifacts
-
+```
 ---
 ## Machine Learning Component
 
