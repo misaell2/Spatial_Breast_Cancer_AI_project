@@ -192,3 +192,111 @@ Automated HTML report
       |
       v
 AWS S3 results bucket
+
+
+
+
+
+## Results Summary
+
+This project currently analyzes a public 10x Genomics Visium breast cancer dataset and builds an interpretable machine learning workflow for spatial niche classification.
+
+### Completed Milestones
+
+- Loaded and quality-controlled public 10x Visium breast cancer spatial transcriptomics data.
+- Performed conservative spot filtering, normalization, highly variable gene selection, PCA, UMAP, and Leiden clustering.
+- Identified marker genes for each spatial cluster using differential expression.
+- Manually annotated biological tissue niches using marker genes and spatial expression patterns.
+- Trained baseline machine learning models to classify manually annotated spatial niches.
+- Evaluated model robustness using spatial block holdout validation.
+
+### Manual Spatial Niche Annotation
+
+Manual annotations were assigned using cluster-level marker genes, known breast cancer/tumor microenvironment markers, and spatial expression patterns.
+
+High-confidence niche labels included:
+
+- Antigen-presenting myeloid
+- B-cell/plasma-cell immune
+- Tumor epithelial
+- Tumor luminal-like
+- Hypoxic/metabolic tumor-like
+- Keratin-high tumor
+- Luminal/secretory epithelial
+- Adipocyte/fat-associated
+
+Low-confidence or mixed clusters were excluded from supervised ML training.
+
+![Manual spatial niche labels](docs/figures/01_spatial_manual_niche_labels.png)
+
+### Label Confidence
+
+Clusters with ambiguous, mixed, mitochondrial/high-oxidative, or review-needed annotations were flagged as lower confidence and excluded from model training.
+
+![Manual label confidence](docs/figures/02_spatial_manual_label_confidence.png)
+
+---
+
+## Baseline Machine Learning Model
+
+The first supervised model used manually annotated spatial niche labels as weak supervision.
+
+### Features
+
+The baseline classifier used:
+
+- PCA coordinates from normalized gene expression
+- QC metrics
+- Spatial coordinates
+- Marker signature scores for tumor, immune, myeloid, stromal, adipocyte, proliferation, hypoxia/glycolysis, and luminal/secretory programs
+
+### Models Compared
+
+- Logistic regression
+- Random forest
+
+### Random Split Results
+
+The random forest performed best in the random train/test split.
+
+| Model | Accuracy | Balanced Accuracy | Macro F1 | Weighted F1 |
+|---|---:|---:|---:|---:|
+| Random forest | 0.9409 | 0.9277 | 0.9392 | 0.9407 |
+| Logistic regression | 0.9247 | 0.9278 | 0.9275 | 0.9248 |
+
+![Random forest confusion matrix](docs/figures/03_random_forest_confusion_matrix.png)
+
+![Random forest feature importance](docs/figures/04_random_forest_feature_importance.png)
+
+### Spatial ML Predictions
+
+The trained random forest was used to predict niche labels across all Visium spots, including low-confidence/review regions.
+
+![Spatial ML predicted labels](docs/figures/05_spatial_ml_predicted_labels.png)
+
+![Spatial ML prediction confidence](docs/figures/06_spatial_ml_prediction_confidence.png)
+
+---
+
+## Spatial Holdout Validation
+
+Random spot-level train/test splits can overestimate performance in spatial transcriptomics because neighboring spots are correlated. To evaluate robustness more realistically, the tissue was divided into a 3 × 3 spatial grid and the model was evaluated using leave-one-spatial-block-out validation.
+
+![Spatial blocks and training labels](docs/figures/07_spatial_blocks_and_training_labels.png)
+
+### Spatial Holdout Results
+
+Spatial holdout validation showed more variable performance than the random split baseline.
+
+- With spatial coordinates: macro F1 ranged from approximately 0.66 to 0.92 across held-out blocks.
+- Without spatial coordinates: macro F1 ranged from approximately 0.71 to 0.92 across held-out blocks.
+
+The model without raw spatial coordinates performed similarly to the model with spatial coordinates, suggesting that the classifier learned meaningful expression and marker-signature patterns rather than simply memorizing tissue position.
+
+![Spatial holdout macro F1](docs/figures/08_spatial_holdout_macro_f1.png)
+
+### Interpretation
+
+The random split results show that manually annotated spatial niches can be predicted from expression-derived and marker-signature features. The spatial holdout results provide a more conservative evaluation and show that performance depends on tissue-region composition and label balance.
+
+This supports the use of spatially aware validation for spatial transcriptomics ML workflows.
