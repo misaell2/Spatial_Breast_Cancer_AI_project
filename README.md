@@ -300,3 +300,19 @@ The model without raw spatial coordinates performed similarly to the model with 
 The random split results show that manually annotated spatial niches can be predicted from expression-derived and marker-signature features. The spatial holdout results provide a more conservative evaluation and show that performance depends on tissue-region composition and label balance.
 
 This supports the use of spatially aware validation for spatial transcriptomics ML workflows.
+
+
+## Related Work and Differentiation
+
+Many public analyses use 10x Genomics human breast cancer Visium datasets for spatial transcriptomics tutorials, spatial domain detection, cell-type deconvolution, super-resolution, and tissue annotation.
+
+This project differs by focusing on an end-to-end, portfolio-ready workflow that combines:
+
+- Reproducible spatial transcriptomics preprocessing
+- Marker-gene-driven biological interpretation
+- Manual niche annotation
+- Weakly supervised machine learning
+- Random split and spatial holdout validation
+- Planned cloud deployment using AWS
+
+The goal is not only to cluster spatial transcriptomics data, but to build an interpretable and extensible system for automated spatial niche classification.
