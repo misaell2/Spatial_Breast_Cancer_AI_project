@@ -87,7 +87,35 @@ The workflow will include:
 13. Automated report generation
 
 ---
+## Repository Structure
 
+```text
+Spatial_Breast_Cancer_AI_project/
+├── README.md
+├── data_manifest/
+│   └── annotations/
+│       └── leiden_r06_manual_cluster_annotations.csv
+├── docs/
+│   ├── figures/
+│   └── tables/
+├── src/
+│   ├── preprocessing/
+│   │   ├── 01_load_visium_qc.py
+│   │   └── 02_preprocess_cluster.py
+│   ├── analysis/
+│   │   ├── 03_marker_gene_analysis.py
+│   │   └── 04_apply_manual_annotations.py
+│   └── modeling/
+│       ├── 05_train_baseline_niche_classifier.py
+│       └── 06_spatial_holdout_validation.py
+├── aws/
+├── workflows/
+├── tests/
+├── data/       # ignored; local raw/processed data
+├── results/    # ignored; generated analysis outputs
+└── models/     # ignored; trained local model artifacts
+
+---
 ## Machine Learning Component
 
 The ML component, called **SpatialNicheAI**, is designed to automate biological interpretation of spatial transcriptomics data.
