@@ -348,7 +348,6 @@ In progress / planned:
 
 ---
 
-
 ## Docker Reproducibility
 
 This project includes a Docker-based environment for reproducible local execution.
@@ -357,6 +356,35 @@ Build the image:
 
 ```bash
 docker build -t spatial-bc-ai:local .
+```
+
+Test the environment:
+
+```bash
+docker run --rm spatial-bc-ai:local
+```
+
+Run a validation script using local mounted data:
+
+```bash
+docker run --rm \
+  -v "$PWD":/workspace \
+  -w /workspace \
+  spatial-bc-ai:local \
+  python src/modeling/06_spatial_holdout_validation.py
+```
+
+Run the full local workflow:
+
+```bash
+docker run --rm \
+  -v "$PWD":/workspace \
+  -w /workspace \
+  spatial-bc-ai:local \
+  bash workflows/run_local_pipeline.sh
+```
+
+Large datasets and generated outputs are not stored inside the Docker image. Local `data/`, `results/`, and `models/` directories are mounted at runtime.
 
 ---
 
