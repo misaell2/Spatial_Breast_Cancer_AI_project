@@ -1,0 +1,19 @@
+feature_set,heldout_block,n_train_spots,n_test_spots,n_train_labels,n_test_labels,test_labels,labels_missing_from_train,accuracy,balanced_accuracy,macro_f1,weighted_f1
+with_spatial_coordinates,x0_y0,3530,187,8,3,B/plasma immune;Luminal/secretory;Myeloid/APC,,0.8556149732620321,0.8281071585419412,0.8221350677861524,0.8518431979225416
+with_spatial_coordinates,x0_y1,3360,357,8,6,B/plasma immune;Keratin-high tumor;Luminal/secretory;Myeloid/APC;Tumor epithelial;Tumor luminal-like,,0.8627450980392157,0.7061445542577619,0.6635142598200795,0.8637471754388805
+with_spatial_coordinates,x0_y2,3218,499,8,3,Hypoxic/metabolic tumor;Tumor epithelial;Tumor luminal-like,,0.9258517034068137,0.9259344080288193,0.9235341307230224,0.9257070197498917
+with_spatial_coordinates,x1_y0,3390,327,8,4,Adipocyte/fat;B/plasma immune;Luminal/secretory;Myeloid/APC,,0.9235474006116208,0.9127511288528238,0.9055458445892262,0.9223372797599003
+with_spatial_coordinates,x1_y1,3293,424,8,6,Adipocyte/fat;B/plasma immune;Keratin-high tumor;Myeloid/APC;Tumor epithelial;Tumor luminal-like,,0.9080188679245284,0.829601078947977,0.8346630028297329,0.9075060925052306
+with_spatial_coordinates,x1_y2,3162,555,8,5,B/plasma immune;Hypoxic/metabolic tumor;Myeloid/APC;Tumor epithelial;Tumor luminal-like,,0.8774774774774775,0.7248824087105747,0.7123384453813959,0.8775219858694816
+with_spatial_coordinates,x2_y0,3294,423,8,4,Adipocyte/fat;B/plasma immune;Luminal/secretory;Myeloid/APC,,0.9196217494089834,0.9391042340400048,0.7310932586798319,0.9224847645373148
+with_spatial_coordinates,x2_y1,3183,534,8,5,Adipocyte/fat;B/plasma immune;Keratin-high tumor;Luminal/secretory;Myeloid/APC,,0.898876404494382,0.9239604026789381,0.7448061557384532,0.902023474411832
+with_spatial_coordinates,x2_y2,3306,411,8,7,Adipocyte/fat;B/plasma immune;Hypoxic/metabolic tumor;Keratin-high tumor;Myeloid/APC;Tumor epithelial;Tumor luminal-like,,0.9148418491484185,0.8285029470946432,0.7872559628226521,0.9140486824058237
+without_spatial_coordinates,x0_y0,3530,187,8,3,B/plasma immune;Luminal/secretory;Myeloid/APC,,0.8449197860962567,0.8295125164690381,0.8152787952787953,0.8433964728082375
+without_spatial_coordinates,x0_y1,3360,357,8,6,B/plasma immune;Keratin-high tumor;Luminal/secretory;Myeloid/APC;Tumor epithelial;Tumor luminal-like,,0.8879551820728291,0.7566517183945187,0.7476608479330485,0.8873258144638411
+without_spatial_coordinates,x0_y2,3218,499,8,3,Hypoxic/metabolic tumor;Tumor epithelial;Tumor luminal-like,,0.9218436873747495,0.9227542066663065,0.9203240477799756,0.9216711909899199
+without_spatial_coordinates,x1_y0,3390,327,8,4,Adipocyte/fat;B/plasma immune;Luminal/secretory;Myeloid/APC,,0.9296636085626911,0.884633422769016,0.8891466342348315,0.9288037448228066
+without_spatial_coordinates,x1_y1,3293,424,8,6,Adipocyte/fat;B/plasma immune;Keratin-high tumor;Myeloid/APC;Tumor epithelial;Tumor luminal-like,,0.9127358490566038,0.8327756821225801,0.840986440986441,0.9123396123396124
+without_spatial_coordinates,x1_y2,3162,555,8,5,B/plasma immune;Hypoxic/metabolic tumor;Myeloid/APC;Tumor epithelial;Tumor luminal-like,,0.8738738738738738,0.7224625085896762,0.7098912574883449,0.8740289116257376
+without_spatial_coordinates,x2_y0,3294,423,8,4,Adipocyte/fat;B/plasma immune;Luminal/secretory;Myeloid/APC,,0.9243498817966903,0.9437400811474429,0.7338955593672575,0.9270966951282755
+without_spatial_coordinates,x2_y1,3183,534,8,5,Adipocyte/fat;B/plasma immune;Keratin-high tumor;Luminal/secretory;Myeloid/APC,,0.8895131086142322,0.9210928659441245,0.8732412509123874,0.8926432586050668
+without_spatial_coordinates,x2_y2,3306,411,8,7,Adipocyte/fat;B/plasma immune;Hypoxic/metabolic tumor;Keratin-high tumor;Myeloid/APC;Tumor epithelial;Tumor luminal-like,,0.9197080291970803,0.8215995807446932,0.7880461543068312,0.9174956675626332

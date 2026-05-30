@@ -1,0 +1,13 @@
+leiden_r06,manual_niche_label,manual_niche_label_short,manual_label_confidence,ml_training_label,n_spots
+0,Antigen-presenting myeloid,Myeloid/APC,high_confidence,Myeloid/APC,978
+1,B-Cell/Plasma Cell,B/plasma immune,high_confidence,B/plasma immune,623
+2,Tumor epithelial,Tumor epithelial,high_confidence,Tumor epithelial,597
+3,Tumor epithelial/ luminal-like,Tumor luminal-like,high_confidence,Tumor luminal-like,575
+4,Metabolic/hypoxic tumor-like,Hypoxic/metabolic tumor,high_confidence,Hypoxic/metabolic tumor,396
+5,"Mixed epithelial/ stromal-like, needs review",Mixed epi/stromal,low_confidence_or_review,Exclude_low_confidence,392
+6,"Mixed epithelial/stress-like, needs review",Mixed epi/stress,low_confidence_or_review,Exclude_low_confidence,337
+7,"Mitochondrial/high oxidative signal, low-confidence",Mitochondrial/high oxidative,low_confidence_or_review,Exclude_low_confidence,310
+8,Tumor epithelial/ kerating-high,Keratin-high tumor,high_confidence,Keratin-high tumor,254
+9,Luminal/secretory epithelial,Luminal/secretory,high_confidence,Luminal/secretory,202
+10,Adipocyte/fat-associated,Adipocyte/fat,high_confidence,Adipocyte/fat,92
+11,"Rare epithelial/immune-checkpoint-associated, needs review",Rare epithelial/VTCN1,low_confidence_or_review,Exclude_low_confidence,53
