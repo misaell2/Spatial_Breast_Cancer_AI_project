@@ -1,0 +1,16 @@
+FROM mambaorg/micromamba:1.5.10
+
+LABEL project="Spatial_Breast_Cancer_AI_project"
+LABEL description="Reproducible environment for breast cancer spatial transcriptomics ML workflow"
+
+WORKDIR /workspace
+
+COPY --chown=$MAMBA_USER:$MAMBA_USER environment.yml /tmp/environment.yml
+
+RUN micromamba install -y -n base -f /tmp/environment.yml && \
+    micromamba clean --all --yes
+
+ENV PYTHONUNBUFFERED=1
+ENV MPLBACKEND=Agg
+
+CMD ["python", "--version"]

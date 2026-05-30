@@ -348,6 +348,18 @@ In progress / planned:
 
 ---
 
+
+## Docker Reproducibility
+
+This project includes a Docker-based environment for reproducible local execution.
+
+Build the image:
+
+```bash
+docker build -t spatial-bc-ai:local .
+
+---
+
 ## Author
 
 **Misael Lazaro**

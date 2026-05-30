@@ -1,0 +1,21 @@
+name: spatial-bc-ai
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.10
+  - scanpy
+  - anndata
+  - pandas
+  - numpy
+  - scipy
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - h5py
+  - pillow
+  - leidenalg
+  - python-igraph
+  - joblib
+  - pip
