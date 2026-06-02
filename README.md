@@ -388,6 +388,27 @@ Large datasets and generated outputs are not stored inside the Docker image. Loc
 
 ---
 
+### AWS Cloud Execution
+
+The Dockerized workflow was successfully executed on AWS EC2 using S3 for cloud storage.
+
+Completed AWS components:
+
+- uploaded raw 10x Visium input data and annotation manifests to S3
+- launched an Ubuntu EC2 instance for cloud compute
+- attached an IAM role to EC2 for secure S3 access without storing access keys on the instance
+- cloned the GitHub repository onto EC2 using SSH
+- built the project Docker image on EC2
+- ran the full end-to-end workflow inside Docker
+- synced generated results, trained models, logs, and processed AnnData files back to S3
+
+Completed AWS run:
+
+```text
+RUN_ID=ec2_run_20260602_170837
+
+---
+
 ## Author
 
 **Misael Lazaro**
