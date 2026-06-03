@@ -1,6 +1,6 @@
 # SpatialNicheAI: Interpretable ML for breast cancer spatial transcriptomics
 
-SpatialNicheAI is an end-to-end bioinformatics and machine learning project that analyzes a public 10x Genomics Visium breast cancer dataset to identify, interpret, and classify spatial tumor microenvironment niches.
+SpatialNicheAI is an end-to-end bioinformatics and machine learning project that analyzes a public 10x Genomics Visium breast cancer dataset to classify spatial tumor microenvironment niches.
 
 The project combines:
 
@@ -24,9 +24,10 @@ Breast tumors are spatially heterogeneous. Tumor epithelial regions, luminal/sec
 
 This project asks:
 
-> Can spatial transcriptomics identify biologically meaningful breast cancer tissue niches, and can machine learning learn to classify those niches from expression-derived and spatial-context features?
+> 1) Can spatial transcriptomics identify biologically meaningful breast cancer tissue niches?
+> 2) Can machine learning learn to classify those niches from expression-derived and spatial-context features?
 
-The workflow starts with public 10x Visium data and produces annotated spatial niche maps, marker-gene evidence, ML model comparisons, spatial holdout validation, Dockerized execution, and AWS cloud execution documentation.
+The workflow starts with public 10x Visium data and produces annotated spatial niche maps, marker-gene evidence. It then moves to ML model comparisons, spatial holdout validation, Dockerized execution, and AWS cloud execution documentation.
 
 ---
 
