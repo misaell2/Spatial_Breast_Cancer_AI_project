@@ -322,6 +322,8 @@ def main() -> None:
     print("\nDone. Initial QC figures saved to:")
     print(OUT_DIR)
 
+print("\nMilestone 1 complete.")
+
 
 if __name__ == "__main__":
     main()
