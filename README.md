@@ -1,16 +1,16 @@
-# Spatial_Breast_Cancer_AI_project
+# SpatialNicheAI: Interpretable ML for breast cancer spatial transcriptomics
 
-## SpatialNicheAI: Interpretable ML for breast cancer spatial transcriptomics
-
-SpatialNicheAI is an end-to-end bioinformatics and machine learning project using a public 10x Genomics Visium breast cancer dataset to identify, interpret, and classify spatial tumor microenvironment niches.
+SpatialNicheAI is an end-to-end bioinformatics and machine learning project that analyzes a public 10x Genomics Visium breast cancer dataset to identify, interpret, and classify spatial tumor microenvironment niches.
 
 The project combines:
 
 - 10x Visium spatial transcriptomics analysis
+- Scanpy and Squidpy-based spatial analysis
 - marker-gene-based biological interpretation
-- manual niche annotation
+- manual biological niche annotation
 - supervised machine learning
-- spatial holdout validation
+- five-model ML comparison
+- spatial holdout validation across tissue blocks
 - Docker reproducibility
 - AWS EC2 + S3 cloud execution
 
@@ -20,13 +20,13 @@ The goal is to show how spatial transcriptomics can reveal biologically meaningf
 
 ## Project Overview
 
-Breast tumors are spatially heterogeneous. Tumor epithelial regions, immune niches, stromal regions, adipose tissue, and metabolically stressed tumor regions can occupy different areas of the same tissue section.
+Breast tumors are spatially heterogeneous. Tumor epithelial regions, luminal/secretory regions, immune niches, stromal-like regions, adipose tissue, and metabolically stressed tumor regions can occupy different areas of the same tissue section.
 
 This project asks:
 
-> Can spatial transcriptomics identify biologically meaningful breast cancer tissue niches, and can machine learning learn to classify those niches from expression-derived features?
+> Can spatial transcriptomics identify biologically meaningful breast cancer tissue niches, and can machine learning learn to classify those niches from expression-derived and spatial-context features?
 
-The workflow starts with public 10x Visium data and produces annotated spatial niche maps, marker-gene evidence, baseline ML models, spatial holdout validation, and cloud-executed results.
+The workflow starts with public 10x Visium data and produces annotated spatial niche maps, marker-gene evidence, ML model comparisons, spatial holdout validation, Dockerized execution, and AWS cloud execution documentation.
 
 ---
 
@@ -41,9 +41,7 @@ Primary dataset:
 
 Dataset page:
 
-```text
-https://www.10xgenomics.com/datasets/human-breast-cancer-visium-fresh-frozen-whole-transcriptome-1-standard
-```
+    https://www.10xgenomics.com/datasets/human-breast-cancer-visium-fresh-frozen-whole-transcriptome-1-standard
 
 Large raw data files are not committed to GitHub. They are downloaded locally or stored in S3 for cloud execution.
 
@@ -51,67 +49,66 @@ Large raw data files are not committed to GitHub. They are downloaded locally or
 
 ## Workflow Summary
 
-```text
-Public 10x Visium breast cancer data
-        |
-        v
-Load data and calculate QC metrics
-        |
-        v
-Filter spots, normalize counts, select highly variable genes
-        |
-        v
-PCA, UMAP, Leiden clustering
-        |
-        v
-Differential expression and marker-gene analysis
-        |
-        v
-Manual biological niche annotation
-        |
-        v
-Baseline ML model training
-        |
-        v
-Random split validation + spatial holdout validation
-        |
-        v
-Dockerized local workflow + AWS EC2/S3 execution
-```
+    Public 10x Visium breast cancer data
+            |
+            v
+    Load data and calculate QC metrics
+            |
+            v
+    Filter spots, normalize counts, select highly variable genes
+            |
+            v
+    PCA, UMAP, Leiden clustering
+            |
+            v
+    Squidpy spatial neighbor graph
+            |
+            v
+    Differential expression, marker analysis, Moran's I, neighborhood enrichment
+            |
+            v
+    Manual biological niche annotation
+            |
+            v
+    Five-model supervised ML comparison
+            |
+            v
+    Random split validation + spatial holdout validation
+            |
+            v
+    Dockerized local workflow + AWS EC2/S3 execution
 
 ---
 
 ## Repository Structure
 
-```text
-Spatial_Breast_Cancer_AI_project/
-├── README.md
-├── Dockerfile
-├── environment.yml
-├── data_manifest/
-│   └── annotations/
-│       └── leiden_r06_manual_cluster_annotations.csv
-├── docs/
-│   ├── figures/       # selected README figures
-│   └── tables/        # selected summary tables
-├── src/
-│   ├── preprocessing/
-│   │   ├── 01_load_visium_qc.py
-│   │   └── 02_preprocess_cluster.py
-│   ├── analysis/
-│   │   ├── 03_marker_gene_analysis.py
-│   │   └── 04_apply_manual_annotations.py
-│   └── modeling/
-│       ├── 05_train_baseline_niche_classifier.py
-│       └── 06_spatial_holdout_validation.py
-├── workflows/
-│   └── run_local_pipeline.sh
-├── aws/
-│   └── EC2_S3_RUNBOOK.md
-├── data/       # ignored; local raw/processed data
-├── results/    # ignored; generated outputs
-└── models/     # ignored; trained model artifacts
-```
+    Spatial_Breast_Cancer_AI_project/
+    ├── README.md
+    ├── Dockerfile
+    ├── environment.yml
+    ├── data_manifest/
+    │   └── annotations/
+    │       └── leiden_r06_manual_cluster_annotations.csv
+    ├── docs/
+    │   ├── figures/       # selected README figures
+    │   └── tables/        # selected summary tables
+    ├── src/
+    │   ├── preprocessing/
+    │   │   ├── 01_load_visium_qc.py
+    │   │   └── 02_preprocess_cluster.py
+    │   ├── analysis/
+    │   │   ├── 03_marker_gene_analysis.py
+    │   │   └── 04_apply_manual_annotations.py
+    │   └── modeling/
+    │       ├── 05_train_baseline_niche_classifier.py
+    │       └── 06_spatial_holdout_validation.py
+    ├── workflows/
+    │   └── run_local_pipeline.sh
+    ├── aws/
+    │   └── EC2_S3_RUNBOOK.md
+    ├── data/       # ignored; local raw/processed data
+    ├── results/    # ignored except selected committed summaries
+    └── models/     # ignored except selected committed metadata
 
 ---
 
@@ -122,20 +119,21 @@ Leiden clusters were interpreted using:
 - cluster-level differential expression
 - known breast cancer and tumor microenvironment marker genes
 - spatial marker expression patterns
+- Squidpy spatial neighborhood enrichment
+- Moran's I spatial autocorrelation
 - manual biological review
 
 High-confidence spatial niche labels included:
 
 - **Tumor epithelial**
-- **Tumor luminal-like**
 - **Hypoxic/metabolic tumor-like**
-- **Keratin-high tumor**
+- **Keratin-high tumor epithelial**
+- **Luminal/stress-like epithelial**
 - **Luminal/secretory epithelial**
-- **Antigen-presenting myeloid**
+- **Antigen-presenting myeloid/APC**
 - **B-cell/plasma-cell immune**
-- **Adipocyte/fat-associated**
 
-Low-confidence, mixed, mitochondrial/high-oxidative, or review-needed clusters were excluded from supervised ML training.
+Low-confidence, mixed, rare, or review-needed clusters were excluded from supervised ML training.
 
 ![Manual spatial niche labels](docs/figures/01_spatial_manual_niche_labels.png)
 
@@ -143,11 +141,11 @@ Low-confidence, mixed, mitochondrial/high-oxidative, or review-needed clusters w
 
 The spatial niche map suggests several biologically meaningful tissue regions:
 
-- Tumor epithelial and luminal-like tumor regions form coherent spatial domains rather than random scattered spots.
+- Tumor epithelial and keratin-high tumor regions form coherent spatial domains rather than random scattered spots.
 - A hypoxic/metabolic tumor-like region appears near tumor-associated epithelial regions, suggesting localized metabolic stress within the tumor area.
 - Immune-associated regions include antigen-presenting myeloid/APC-like areas and B-cell/plasma-cell-enriched areas.
-- Adipocyte/fat-associated spots occupy a distinct tissue region, consistent with surrounding breast adipose tissue.
-- Mixed epithelial/stromal and stress-like clusters were treated cautiously and excluded from high-confidence ML training.
+- Luminal/secretory epithelial regions are supported by breast-associated markers such as `SCGB2A2`, `SCGB1D2`, `GATA3`, and `XBP1`.
+- Mixed epithelial/stromal-like and rare epithelial/neural-like clusters were treated cautiously and excluded from high-confidence ML training.
 
 These interpretations are based on marker genes such as:
 
@@ -168,66 +166,117 @@ These interpretations are based on marker genes such as:
 
 ## Machine Learning Results
 
-The supervised ML task used manually curated high-confidence spatial niche labels as weak supervision.
+The supervised ML task used manually curated high-confidence spatial niche labels as weak supervision. Low-confidence, mixed, rare, or review-needed clusters were excluded from model training.
 
 ### Features
 
-The baseline classifier used:
+The ML feature table included:
 
 - PCA coordinates from normalized expression
 - QC metrics
 - spatial coordinates
-- marker signature scores for tumor, immune, myeloid, stromal, adipocyte, proliferation, hypoxia/glycolysis, and luminal/secretory programs
+- marker signature scores for tumor, immune, myeloid/APC, stromal, adipocyte, proliferation, hypoxia/glycolysis, and luminal/secretory programs
+- Squidpy-derived spatial-neighborhood marker-score features
+
+The Squidpy neighborhood features summarize the average marker-signature activity of neighboring Visium spots. This adds local tissue context while keeping the features interpretable.
 
 ### Models compared
 
+Five supervised classifiers were compared:
+
 - Logistic regression
+- Calibrated linear SVM
 - Random forest
+- Extra trees
+- Histogram gradient boosting
 
 ### Random split performance
 
-| Evaluation | Model | Accuracy | Balanced Accuracy | Macro F1 | Weighted F1 |
-|---|---|---:|---:|---:|---:|
-| Random split | Random forest | 0.9409 | 0.9277 | 0.9392 | 0.9407 |
-| Random split | Logistic regression | 0.9247 | 0.9278 | 0.9275 | 0.9248 |
+Under a stratified random spot-level split, histogram gradient boosting performed best.
 
-The random forest performed best in the random split baseline.
+| Model | Accuracy | Balanced Accuracy | Macro F1 | Weighted F1 |
+|---|---:|---:|---:|---:|
+| Histogram gradient boosting | 0.9492 | 0.9479 | 0.9518 | 0.9491 |
+| Random forest | 0.9307 | 0.9303 | 0.9336 | 0.9307 |
+| Extra trees | 0.9261 | 0.9286 | 0.9264 | 0.9260 |
+| Logistic regression | 0.9168 | 0.9264 | 0.9215 | 0.9167 |
+| Calibrated linear SVM | 0.9131 | 0.9196 | 0.9196 | 0.9131 |
 
-![Random forest confusion matrix](docs/figures/03_random_forest_confusion_matrix.png)
+![Model comparison across metrics](docs/figures/03_model_comparison_all_metrics.png)
 
-Feature importance suggested that expression-derived PCs and biologically interpretable marker signature scores both contributed to niche classification.
+![Model comparison by macro F1](docs/figures/04_model_comparison_macro_f1.png)
 
-![Random forest feature importance](docs/figures/04_random_forest_feature_importance.png)
-
-The trained model was also used to predict labels across all Visium spots, including low-confidence/review regions.
+The trained best model was also used to predict labels across all Visium spots, including low-confidence/review regions.
 
 ![Spatial ML predicted labels](docs/figures/05_spatial_ml_predicted_labels.png)
 
 ![Spatial ML prediction confidence](docs/figures/06_spatial_ml_prediction_confidence.png)
 
+### Interpretation
+
+The random-split results show that manually annotated spatial niches can be predicted from expression-derived, marker-signature, QC, and spatial-context features. However, random spot-level splits can overestimate model performance in spatial transcriptomics because neighboring spots are often correlated. For that reason, spatial holdout validation was also performed.
+
 ---
 
 ## Spatial Holdout Validation
 
-Random spot-level train/test splits can overestimate performance in spatial transcriptomics because neighboring spots are correlated.
+Random spot-level train/test splits can overestimate performance in spatial transcriptomics because neighboring spots may share similar expression profiles, tissue morphology, cell-type composition, and technical effects.
 
-To test robustness more realistically, the tissue was divided into a **3 × 3 spatial grid**, and the model was evaluated using leave-one-spatial-block-out validation.
+To test robustness more realistically, the tissue was divided into a **3 × 3 spatial grid**, and models were evaluated using leave-one-spatial-block-out validation.
 
 ![Spatial blocks and training labels](docs/figures/07_spatial_blocks_and_training_labels.png)
 
-Spatial holdout validation showed more variable performance than the random split baseline:
+### Spatial holdout design
 
-- With spatial coordinates: macro F1 ranged from approximately **0.66 to 0.92**
-- Without spatial coordinates: macro F1 ranged from approximately **0.71 to 0.92**
+The spatial holdout workflow evaluated:
 
-This suggests:
+    5 models × 4 feature sets × 9 spatial blocks = 180 validation folds
 
-- random spot-level splits can overestimate performance
-- model performance depends on tissue-region composition and label balance
-- the model learns meaningful expression and marker-signature patterns
-- spatially aware validation is important for spatial transcriptomics ML workflows
+The four feature sets were:
 
-![Spatial holdout macro F1](docs/figures/08_spatial_holdout_macro_f1.png)
+| Feature set | Included features |
+|---|---|
+| `expression_qc_marker` | PCA + QC + marker scores |
+| `expression_qc_marker_spatial` | PCA + QC + marker scores + spatial coordinates |
+| `expression_qc_marker_neighbor` | PCA + QC + marker scores + Squidpy neighbor marker scores |
+| `full_spatial_context` | PCA + QC + marker scores + spatial coordinates + Squidpy neighbor marker scores |
+
+### Spatial holdout results
+
+Histogram gradient boosting remained the strongest overall model under spatial holdout validation, supporting a stronger generalization claim than the random split alone.
+
+Mean spatial-holdout accuracy by model:
+
+| Model | Mean Accuracy |
+|---|---:|
+| Histogram gradient boosting | 0.9283 |
+| Extra trees | 0.9163 |
+| Random forest | 0.9150 |
+| Logistic regression | 0.9049 |
+| Calibrated linear SVM | 0.8870 |
+
+Mean spatial-holdout accuracy by feature set:
+
+| Feature set | Mean Accuracy |
+|---|---:|
+| `expression_qc_marker_spatial` | 0.9120 |
+| `expression_qc_marker_neighbor` | 0.9104 |
+| `full_spatial_context` | 0.9098 |
+| `expression_qc_marker` | 0.9089 |
+
+![Spatial holdout macro F1 by model](docs/figures/08_spatial_holdout_macro_f1_by_model.png)
+
+![Spatial holdout macro F1 by feature set](docs/figures/09_spatial_holdout_macro_f1_by_feature_set.png)
+
+![Spatial holdout macro F1 by model and feature set](docs/figures/10_spatial_holdout_macro_f1_by_model_and_feature_set.png)
+
+![Spatial holdout macro F1 by held-out block](docs/figures/11_spatial_holdout_macro_f1_by_block.png)
+
+### Interpretation
+
+Spatial holdout validation showed that performance depends on tissue-region composition and label balance. Some held-out regions were easier because they contained clearer niche structure, while mixed or label-diverse regions were more difficult.
+
+The fact that histogram gradient boosting remained strong under spatial holdout suggests that the model learned biologically meaningful expression and marker-signature patterns rather than only memorizing random spot-level structure. Still, this is a single-sample validation. True generalization should eventually be tested on additional breast cancer Visium sections or external spatial transcriptomics datasets.
 
 ---
 
@@ -235,79 +284,61 @@ This suggests:
 
 ### 1. Clone the repository
 
-```bash
-git clone git@github.com:misaell2/Spatial_Breast_Cancer_AI_project.git
-cd Spatial_Breast_Cancer_AI_project
-```
+    git clone git@github.com:misaell2/Spatial_Breast_Cancer_AI_project.git
+    cd Spatial_Breast_Cancer_AI_project
 
 ### 2. Download the 10x Visium dataset
 
 Create the expected data folder:
 
-```bash
-mkdir -p data/raw/10x/Visium_Human_Breast_Cancer
-cd data/raw/10x/Visium_Human_Breast_Cancer
-```
+    mkdir -p data/raw/10x/Visium_Human_Breast_Cancer
+    cd data/raw/10x/Visium_Human_Breast_Cancer
 
 Download the public 10x files:
 
-```bash
-BASE="https://cf.10xgenomics.com/samples/spatial-exp/1.3.0/Visium_Human_Breast_Cancer"
+    BASE="https://cf.10xgenomics.com/samples/spatial-exp/1.3.0/Visium_Human_Breast_Cancer"
 
-curl -L --fail --retry 3 -O "$BASE/Visium_Human_Breast_Cancer_filtered_feature_bc_matrix.h5"
-curl -L --fail --retry 3 -O "$BASE/Visium_Human_Breast_Cancer_spatial.tar.gz"
+    curl -L --fail --retry 3 -O "$BASE/Visium_Human_Breast_Cancer_filtered_feature_bc_matrix.h5"
+    curl -L --fail --retry 3 -O "$BASE/Visium_Human_Breast_Cancer_spatial.tar.gz"
 
-tar -xzf Visium_Human_Breast_Cancer_spatial.tar.gz
-```
+    tar -xzf Visium_Human_Breast_Cancer_spatial.tar.gz
 
 Return to the repo root:
 
-```bash
-cd ../../../../
-```
+    cd ../../../../
 
 Expected layout:
 
-```text
-data/raw/10x/Visium_Human_Breast_Cancer/
-├── Visium_Human_Breast_Cancer_filtered_feature_bc_matrix.h5
-├── Visium_Human_Breast_Cancer_spatial.tar.gz
-└── spatial/
-```
+    data/raw/10x/Visium_Human_Breast_Cancer/
+    ├── Visium_Human_Breast_Cancer_filtered_feature_bc_matrix.h5
+    ├── Visium_Human_Breast_Cancer_spatial.tar.gz
+    └── spatial/
 
 ### 3. Run locally with Docker
 
 Build the Docker image:
 
-```bash
-docker build -t spatial-bc-ai:local .
-```
+    docker build -t spatial-bc-ai:local .
 
 Test the environment:
 
-```bash
-docker run --rm spatial-bc-ai:local
-```
+    docker run --rm spatial-bc-ai:local
 
 Run the full workflow:
 
-```bash
-docker run --rm \
-  -v "$PWD":/workspace \
-  -w /workspace \
-  spatial-bc-ai:local \
-  bash workflows/run_local_pipeline.sh
-```
+    docker run --rm \
+      -v "$PWD":/workspace \
+      -w /workspace \
+      spatial-bc-ai:local \
+      bash workflows/run_local_pipeline.sh
 
 Generated outputs will be written to:
 
-```text
-data/processed/
-results/
-models/
-```
+    data/processed/
+    results/
+    models/
 
-These folders are ignored by Git.
+These folders are mostly ignored by Git, except for selected lightweight summary outputs used in the README.
 
 ---
 
@@ -327,15 +358,11 @@ Completed AWS components:
 
 Completed AWS run:
 
-```text
-RUN_ID=ec2_run_20260602_170837
-```
+    RUN_ID=ec2_run_20260602_170837
 
 The AWS workflow is documented in:
 
-```text
-aws/EC2_S3_RUNBOOK.md
-```
+    aws/EC2_S3_RUNBOOK.md
 
 The live AWS resources were not kept running after the milestone to avoid ongoing cloud charges.
 
@@ -345,14 +372,13 @@ The live AWS resources were not kept running after the milestone to avoid ongoin
 
 Large generated files are intentionally excluded from Git tracking:
 
-```text
-data/
-results/
-models/
-*.h5ad
-*.h5
-*.tar.gz
-```
+    data/
+    results/
+    models/
+    *.h5ad
+    *.h5
+    *.tar.gz
+    *.joblib
 
 Selected lightweight figures and summary tables are copied into `docs/` for GitHub display.
 
@@ -365,11 +391,14 @@ This keeps the repository readable while preserving a reproducible workflow.
 Completed:
 
 - 10x Visium breast cancer data loading and QC
-- preprocessing and Leiden clustering
+- Scanpy/Squidpy preprocessing and spatial neighbor graph construction
+- Leiden clustering
 - marker-gene analysis
+- Moran's I spatial autocorrelation
+- Squidpy neighborhood enrichment
 - manual biological niche annotation
-- baseline ML classification
-- spatial holdout validation
+- five-model ML classification
+- spatial holdout validation across models and feature sets
 - Dockerized reproducible workflow
 - AWS EC2 + S3 workflow execution
 - GitHub documentation with selected figures and results
@@ -400,45 +429,45 @@ Users are responsible for complying with the terms of use of any external datase
 
 10x Genomics. Human Breast Cancer: Visium Fresh Frozen, Whole Transcriptome.
 
-```text
-https://www.10xgenomics.com/datasets/human-breast-cancer-visium-fresh-frozen-whole-transcriptome-1-standard
-```
+    https://www.10xgenomics.com/datasets/human-breast-cancer-visium-fresh-frozen-whole-transcriptome-1-standard
 
 ### Spatial transcriptomics analysis
 
 Scanpy spatial transcriptomics tutorial.
 
-```text
-https://scanpy.readthedocs.io/en/stable/tutorials/spatial/basic-analysis.html
-```
+    https://scanpy.readthedocs.io/en/stable/tutorials/spatial/basic-analysis.html
 
 Scanpy `read_visium` documentation.
 
-```text
-https://scanpy.readthedocs.io/en/stable/api/scanpy.read_visium.html
-```
+    https://scanpy.readthedocs.io/en/stable/api/scanpy.read_visium.html
+
+Squidpy documentation.
+
+    https://squidpy.readthedocs.io/
+
+Squidpy spatial plotting.
+
+    https://squidpy.readthedocs.io/en/stable/api/squidpy.pl.spatial_scatter.html
+
+Squidpy spatial neighbors.
+
+    https://squidpy.readthedocs.io/en/stable/api/squidpy.gr.spatial_neighbors.html
 
 ### Related spatial transcriptomics methods
 
 SpaceMarkers: molecular interaction analysis from spatial transcriptomics.
 
-```text
-https://www.sciencedirect.com/science/article/pii/S2405471223000807
-```
+    https://www.sciencedirect.com/science/article/pii/S2405471223000807
 
 TESLA: machine learning framework for tissue annotation from spatial transcriptomics.
 
-```text
-https://pmc.ncbi.nlm.nih.gov/articles/PMC10246692/
-```
+    https://pmc.ncbi.nlm.nih.gov/articles/PMC10246692/
 
 ### Future validation resource
 
 TCGA-BRCA project page.
 
-```text
-https://portal.gdc.cancer.gov/projects/TCGA-BRCA
-```
+    https://portal.gdc.cancer.gov/projects/TCGA-BRCA
 
 ---
 
