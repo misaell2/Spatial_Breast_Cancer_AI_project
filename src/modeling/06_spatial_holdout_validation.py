@@ -1,5 +1,5 @@
 """
-Milestone 4.5: Spatial holdout validation for the baseline niche classifier.
+Milestone 6: Spatial holdout validation for the baseline niche classifier.
 
 Purpose
 -------
@@ -1063,7 +1063,7 @@ def main() -> None:
 
     plot_holdout_metrics(metrics_df)
 
-    print("\nMilestone 4.5 complete.")
+    print("\nMilestone 6 complete.")
 
 
 if __name__ == "__main__":
