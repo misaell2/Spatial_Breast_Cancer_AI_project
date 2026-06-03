@@ -3,10 +3,34 @@ Milestone 1: Load 10x Visium breast cancer data and perform initial QC.
 
 Purpose
 -------
-This script is the first checkpoint in the project. It loads the public
-10x Genomics Visium breast cancer dataset, checks that the spatial data loaded
-correctly, calculates basic quality-control metrics, and generates initial
-figures.
+This script is the first checkpoint in the SpatialNicheAI workflow.
+
+It loads the public 10x Genomics Visium breast cancer dataset, confirms that
+the spatial metadata and image information loaded correctly, calculates basic
+quality-control metrics, and generates first-pass QC and marker-gene figures.
+
+Why Squidpy is used here
+------------------------
+This project originally used `scanpy.read_visium()`, which worked well for
+loading the 10x Visium data. Now that Squidpy has been added to the project,
+this script uses `squidpy.read.visium()` instead.
+
+Squidpy is useful because it is built specifically for spatial omics workflows.
+For this script, the practical benefit is modest: it loads the same 10x Visium
+components used by Scanpy, including:
+
+    - count matrix
+    - spatial coordinates
+    - tissue images
+    - scale factors from the `spatial/` directory
+
+The larger advantage comes in later milestones, where Squidpy can be used for:
+
+    - spatial neighbor graph construction
+    - neighborhood enrichment analysis
+    - niche co-occurrence analysis
+    - spatial autocorrelation of genes/signatures
+    - H&E image feature extraction
 
 Input
 -----
@@ -44,20 +68,32 @@ handled in:
 
     src/preprocessing/02_preprocess_cluster.py
 
-Possible alternative choices
-----------------------------
-- `scanpy.read_visium()` is used here because it works with the current
-  environment. In newer workflows, `squidpy.read.visium()` is often preferred.
-- Additional QC metrics could include ribosomal gene percentage, hemoglobin
-  gene percentage, or spot-level tissue image features.
-- More detailed QC could also include spatial inspection of tissue edges,
-  spot count distributions, and comparison of high/low-quality tissue regions.
+Possible alternative analysis choices
+-------------------------------------
+QC metrics:
+    - ribosomal gene percentage
+    - hemoglobin gene percentage
+    - percent counts in top expressed genes
+    - spot-level image features from H&E tissue morphology
+
+QC plots:
+    - histograms
+    - density plots
+    - total_counts vs n_genes_by_counts scatter plots
+    - spatial plots of QC metrics over tissue
+    - spatial inspection of tissue edges and damaged regions
+
+Spatial analysis:
+    - Squidpy spatial neighbor graph can be added after QC
+    - spatial autocorrelation could be used to identify spatially patterned
+      QC metrics or marker genes
 """
 
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import scanpy as sc
+import squidpy as sq
 
 
 # ---------------------------------------------------------------------
@@ -81,7 +117,14 @@ DATA_DIR = (
 
 # 10x filtered feature-barcode matrix file.
 # This is the processed Space Ranger count matrix used for downstream analysis.
+#
+# Squidpy's parameter name is `counts_file`.
+# Scanpy's older reader uses `count_file`.
 COUNT_FILE = "Visium_Human_Breast_Cancer_filtered_feature_bc_matrix.h5"
+
+# Stable library ID used throughout the project.
+# This key is stored inside adata.uns["spatial"] and is needed for spatial plots.
+LIBRARY_ID = "Visium_Human_Breast_Cancer"
 
 # Output folder for QC figures.
 OUT_DIR = PROJECT_ROOT / "results" / "figures" / "01_initial_qc"
@@ -98,15 +141,26 @@ def save_current_fig(filename: str) -> None:
     """
     Save the active matplotlib figure and close it.
 
+    Why this helper exists
+    ----------------------
+    This script creates several figures. Centralizing the save logic keeps
+    output settings consistent and avoids repeating save/close code.
+
     Parameters
     ----------
     filename:
         Name of the figure file to save inside OUT_DIR.
 
-    Why close the figure?
-    ---------------------
-    Closing figures prevents later plots from overlapping and avoids memory
-    buildup when multiple figures are generated in one script.
+    Alternative parameters
+    ----------------------
+    dpi=150:
+        Smaller files for quick debugging.
+
+    dpi=300:
+        Good balance for GitHub, reports, and presentations. Used here.
+
+    dpi=600:
+        Print-quality figures, but much larger files.
     """
     out_path = OUT_DIR / filename
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
@@ -114,58 +168,182 @@ def save_current_fig(filename: str) -> None:
     print(f"Saved figure: {out_path}")
 
 
-def main() -> None:
+def validate_visium_input_files() -> None:
     """
-    Load Visium data, calculate initial QC metrics, and save QC outputs.
+    Confirm that the expected Visium input files exist before loading.
 
-    Workflow
-    --------
-    1. Load the 10x Visium dataset.
-    2. Confirm expected metadata and spatial fields are present.
-    3. Identify mitochondrial genes.
-    4. Calculate basic QC metrics.
-    5. Save a raw-QC AnnData checkpoint.
-    6. Generate QC and marker-gene spatial plots.
+    Why this function exists
+    ------------------------
+    A missing count matrix or missing `spatial/` folder will cause the reader
+    to fail. Checking upfront gives a clearer error message and helps users
+    fix the data layout quickly.
+
+    Expected layout
+    ---------------
+    data/raw/10x/Visium_Human_Breast_Cancer/
+    ├── Visium_Human_Breast_Cancer_filtered_feature_bc_matrix.h5
+    └── spatial/
+
+    Alternative
+    -----------
+    If the workflow later supports multiple 10x samples, this function could
+    be generalized to validate any dataset path and count filename.
     """
-    print(f"Loading Visium data from: {DATA_DIR}")
+    count_path = DATA_DIR / COUNT_FILE
+    spatial_dir = DATA_DIR / "spatial"
 
-    # ------------------------------------------------------------------
-    # 1. Load 10x Visium data
-    # ------------------------------------------------------------------
-    # `sc.read_visium` reads:
-    #   - the filtered expression matrix
-    #   - spatial coordinates
-    #   - tissue image files
-    #   - scale factors
-    #
-    # `library_id` is used by Scanpy to store and retrieve the spatial image
-    # information under `adata.uns["spatial"][library_id]`.
-    #
-    # Alternative:
-    #   Newer spatial workflows often use `squidpy.read.visium`, but Squidpy
-    #   was skipped early in this project because the local install was slow.
-    adata = sc.read_visium(
+    if not DATA_DIR.exists():
+        raise FileNotFoundError(f"Data directory does not exist: {DATA_DIR}")
+
+    if not count_path.exists():
+        raise FileNotFoundError(f"Count matrix not found: {count_path}")
+
+    if not spatial_dir.exists():
+        raise FileNotFoundError(f"Spatial directory not found: {spatial_dir}")
+
+
+def load_visium_with_squidpy():
+    """
+    Load the 10x Visium dataset using Squidpy.
+
+    Why Squidpy is used here
+    ------------------------
+    Squidpy's `read.visium()` is designed for 10x Visium-formatted spatial
+    transcriptomics data. It reads the expression matrix and also looks for the
+    `spatial/` directory so that images, spatial coordinates, and scale factors
+    are available in the AnnData object.
+
+    The resulting AnnData object is still compatible with Scanpy. This is
+    useful because the project uses:
+
+        - Squidpy for spatial-aware loading/plotting/analysis
+        - Scanpy for standard preprocessing and QC metrics
+
+    Important parameter choices
+    ---------------------------
+    path=DATA_DIR:
+        Points to the directory containing the 10x count file and spatial
+        directory.
+
+    counts_file=COUNT_FILE:
+        Tells Squidpy which matrix file to load. The filtered matrix is used
+        because this project starts from 10x's filtered Space Ranger output.
+
+    library_id=LIBRARY_ID:
+        Gives the spatial library a stable name. This is helpful for plotting
+        and for future multi-sample workflows.
+
+    load_images=True:
+        Loads the tissue images and scale factors. This is important because
+        the project relies on spatial plots over the tissue image.
+
+    Alternative parameter choices
+    -----------------------------
+    counts_file="raw_feature_bc_matrix.h5":
+        Could be used if starting from the raw Space Ranger matrix instead of
+        the filtered matrix.
+
+    load_images=False:
+        Faster and lighter, but not appropriate here because spatial tissue
+        plots are central to the project.
+
+    source_image_path=<path>:
+        Can be used when a higher-quality image is stored outside the standard
+        10x `spatial/` directory.
+    """
+    adata = sq.read.visium(
         path=DATA_DIR,
-        count_file=COUNT_FILE,
-        library_id="Visium_Human_Breast_Cancer",
+        counts_file=COUNT_FILE,
+        library_id=LIBRARY_ID,
         load_images=True,
     )
 
     # Ensure gene names are unique.
-    # Some downstream Scanpy operations require unique variable names.
-    # If duplicate gene symbols exist, Scanpy appends suffixes to make them
-    # unique.
+    #
+    # Why this matters:
+    # Some downstream Scanpy and AnnData operations expect unique var_names.
+    # If duplicate gene symbols are present, Scanpy appends suffixes to make
+    # them unique.
     adata.var_names_make_unique()
 
-    # ------------------------------------------------------------------
-    # 2. Print basic object information
-    # ------------------------------------------------------------------
-    # AnnData stores:
-    #   - adata.X: expression matrix
-    #   - adata.obs: spot/cell metadata
-    #   - adata.var: gene metadata
-    #   - adata.obsm["spatial"]: spatial coordinates
-    #   - adata.uns["spatial"]: image and scale-factor metadata
+    return adata
+
+
+def add_basic_qc_metrics(adata):
+    """
+    Add basic QC metrics to the AnnData object.
+
+    Why these QC metrics are included
+    ---------------------------------
+    total_counts:
+        Total UMI counts per spot. Very low counts may indicate weak capture,
+        tissue-free spots, or poor-quality regions.
+
+    n_genes_by_counts:
+        Number of detected genes per spot. Low values may indicate low
+        complexity or poor-quality spots.
+
+    pct_counts_mt:
+        Percent of counts from mitochondrial genes. High mitochondrial signal
+        can indicate tissue stress or damage, but in spatial transcriptomics it
+        can also reflect biology or local metabolic state.
+
+    Why this step still uses Scanpy
+    -------------------------------
+    Squidpy and Scanpy work together in the scverse ecosystem. Squidpy focuses
+    on spatial functionality, while Scanpy provides mature preprocessing and QC
+    functions such as `sc.pp.calculate_qc_metrics()`.
+
+    Alternative QC parameters
+    -------------------------
+    percent_top=[50, 100, 200]:
+        Adds the percent of counts contributed by the top expressed genes.
+        Useful for identifying spots dominated by a small number of genes.
+
+    qc_vars=["mt", "ribo", "hb"]:
+        Could add ribosomal and hemoglobin gene QC once those gene sets are
+        defined in adata.var.
+    """
+    # Human mitochondrial genes usually begin with "MT-".
+    adata.var["mt"] = adata.var_names.str.upper().str.startswith("MT-")
+
+    # Optional additional QC gene sets.
+    #
+    # Ribosomal genes:
+    #   RPS* and RPL* genes can be useful QC features.
+    #
+    # Hemoglobin genes:
+    #   HBA* and HBB* genes can indicate blood contamination or erythrocyte
+    #   signal in some datasets.
+    #
+    # These are added here even if not used in filtering yet, because they make
+    # future QC expansion straightforward.
+    adata.var["ribo"] = adata.var_names.str.upper().str.startswith(("RPS", "RPL"))
+    adata.var["hb"] = adata.var_names.str.upper().str.startswith(("HBA", "HBB"))
+
+    sc.pp.calculate_qc_metrics(
+        adata,
+        qc_vars=["mt", "ribo", "hb"],
+        percent_top=[50, 100, 200],
+        log1p=False,
+        inplace=True,
+    )
+
+    return adata
+
+
+def print_dataset_summary(adata) -> None:
+    """
+    Print a compact summary of the loaded Visium object.
+
+    Why this function exists
+    ------------------------
+    Early in the workflow, it is useful to confirm that the object contains
+    expression data, observation metadata, gene metadata, spatial coordinates,
+    and image metadata.
+
+    This catches data loading problems before downstream analysis begins.
+    """
     print("\nLoaded AnnData object:")
     print(adata)
 
@@ -181,118 +359,168 @@ def main() -> None:
     print("\nSpatial coordinate matrix shape:")
     print(adata.obsm["spatial"].shape)
 
-    # ------------------------------------------------------------------
-    # 3. Identify mitochondrial genes
-    # ------------------------------------------------------------------
-    # Human mitochondrial genes usually begin with "MT-", such as:
-    #   MT-CO1, MT-ND1, MT-CYB
-    #
-    # Mitochondrial percentage is a common QC metric. High mitochondrial
-    # fraction can indicate stressed, damaged, or low-quality spots/cells.
-    #
-    # Note:
-    #   In spatial transcriptomics, mitochondrial signal can also reflect
-    #   tissue biology or local metabolic state, so it should not be used too
-    #   aggressively without spatial inspection.
-    adata.var["mt"] = adata.var_names.str.upper().str.startswith("MT-")
-
-    # ------------------------------------------------------------------
-    # 4. Calculate QC metrics
-    # ------------------------------------------------------------------
-    # This adds useful columns to `adata.obs`, including:
-    #   total_counts       = total UMI counts per spot
-    #   n_genes_by_counts  = number of detected genes per spot
-    #   total_counts_mt    = mitochondrial counts per spot
-    #   pct_counts_mt      = percent mitochondrial counts per spot
-    #
-    # `percent_top=None` skips calculating percent counts in top N genes.
-    # Alternative:
-    #   percent_top=[50, 100, 200] can be useful to detect spots dominated by
-    #   a small number of highly expressed genes.
-    sc.pp.calculate_qc_metrics(
-        adata,
-        qc_vars=["mt"],
-        percent_top=None,
-        log1p=False,
-        inplace=True,
-    )
-
-    # Print descriptive statistics to guide filtering thresholds in the next
-    # preprocessing script.
     print("\nQC summary:")
-    print(adata.obs[["total_counts", "n_genes_by_counts", "pct_counts_mt"]].describe())
+    qc_cols = [
+        "total_counts",
+        "n_genes_by_counts",
+        "pct_counts_mt",
+        "pct_counts_ribo",
+        "pct_counts_hb",
+        "pct_counts_in_top_50_genes",
+        "pct_counts_in_top_100_genes",
+        "pct_counts_in_top_200_genes",
+    ]
 
-    # ------------------------------------------------------------------
-    # 5. Save raw-QC AnnData checkpoint
-    # ------------------------------------------------------------------
-    # This file is the input to Milestone 2:
-    #   src/preprocessing/02_preprocess_cluster.py
-    #
-    # It contains raw counts plus QC metrics, but it is not yet filtered,
-    # normalized, or clustered.
-    out_h5ad = PROCESSED_DIR / "visium_human_breast_cancer_raw_qc.h5ad"
-    adata.write_h5ad(out_h5ad)
-    print(f"\nSaved QC AnnData object to: {out_h5ad}")
+    available_qc_cols = [col for col in qc_cols if col in adata.obs.columns]
+    print(adata.obs[available_qc_cols].describe())
 
-    # ------------------------------------------------------------------
-    # 6. Plot QC distributions
-    # ------------------------------------------------------------------
-    # Violin plots summarize key QC metrics across all spots.
-    #
-    # Interpretation:
-    #   - Low total_counts may indicate weak capture or tissue-free spots.
-    #   - Low n_genes_by_counts may indicate low-complexity spots.
-    #   - High pct_counts_mt may indicate stress/damage or strong metabolic
-    #     signal.
-    #
-    # Alternative plots:
-    #   - histograms
-    #   - density plots
-    #   - scatter total_counts vs n_genes_by_counts
-    #   - spatial QC maps by tissue region
+
+def plot_qc_distributions(adata) -> None:
+    """
+    Plot QC metric distributions across all spots.
+
+    Why this plot is useful
+    -----------------------
+    Distribution plots help decide filtering thresholds for the next
+    preprocessing script.
+
+    Interpretation examples
+    -----------------------
+    Low total_counts:
+        May indicate weak capture or poor-quality/tissue-free spots.
+
+    Low n_genes_by_counts:
+        May indicate low-complexity spots.
+
+    High pct_counts_mt:
+        May indicate tissue stress, damage, or metabolic biology.
+
+    High pct_counts_in_top_50_genes:
+        May indicate that a small number of highly expressed genes dominate
+        the spot.
+
+    Alternative plots
+    -----------------
+    - histograms
+    - density plots
+    - total_counts vs n_genes_by_counts scatter
+    - QC metrics stratified by tissue region
+    """
+    qc_plot_keys = [
+        "total_counts",
+        "n_genes_by_counts",
+        "pct_counts_mt",
+        "pct_counts_ribo",
+        "pct_counts_hb",
+        "pct_counts_in_top_50_genes",
+    ]
+
+    available_qc_plot_keys = [key for key in qc_plot_keys if key in adata.obs.columns]
+
     sc.pl.violin(
         adata,
-        keys=["total_counts", "n_genes_by_counts", "pct_counts_mt"],
+        keys=available_qc_plot_keys,
         jitter=0.4,
         multi_panel=True,
         show=False,
     )
     save_current_fig("qc_violin.png")
 
-    # ------------------------------------------------------------------
-    # 7. Plot QC metrics on tissue coordinates
-    # ------------------------------------------------------------------
-    # Spatial QC plots help determine whether low-quality spots are randomly
-    # distributed or localized to tissue edges, folds, damaged regions, or
-    # areas outside tissue.
-    #
-    # Alternative:
-    #   Squidpy's `sq.pl.spatial_scatter` can be used in workflows where
-    #   Squidpy is installed.
-    sc.pl.spatial(
+
+def plot_spatial_qc_metrics(adata) -> None:
+    """
+    Plot QC metrics on the tissue image using Squidpy.
+
+    Why use spatial plots for QC?
+    -----------------------------
+    QC metrics are not only numerical distributions. In spatial data, it is
+    critical to inspect whether low-quality or high-mitochondrial spots are
+    localized to:
+
+        - tissue edges
+        - folds
+        - damaged areas
+        - low tissue coverage areas
+        - regions outside tissue
+
+    Why Squidpy plotting is used
+    ----------------------------
+    Squidpy's `spatial_scatter()` is designed for spatial omics visualization
+    and will be used throughout the project as Squidpy becomes more central.
+
+    Alternative parameters
+    ----------------------
+    img=True:
+        Shows the tissue image behind the spots.
+
+    img=False:
+        Plots only spots and coordinates. Useful if the image makes the plot
+        too visually busy.
+
+    size:
+        Can be adjusted if spots appear too small or too large.
+    """
+    spatial_qc_keys = [
+        "total_counts",
+        "n_genes_by_counts",
+        "pct_counts_mt",
+        "pct_counts_ribo",
+        "pct_counts_hb",
+    ]
+
+    available_spatial_qc_keys = [
+        key for key in spatial_qc_keys if key in adata.obs.columns
+    ]
+
+    sq.pl.spatial_scatter(
         adata,
-        color=["total_counts", "n_genes_by_counts", "pct_counts_mt"],
-        library_id="Visium_Human_Breast_Cancer",
-        show=False,
+        color=available_spatial_qc_keys,
+        library_id=LIBRARY_ID,
+        img=True,
     )
     save_current_fig("spatial_qc_metrics.png")
 
-    # ------------------------------------------------------------------
-    # 8. Plot a small set of biological marker genes
-    # ------------------------------------------------------------------
-    # These markers provide an early sanity check that biologically relevant
-    # signals are spatially structured.
-    #
-    # Marker examples:
-    #   EPCAM  = epithelial/tumor-associated
-    #   KRT18  = epithelial marker
-    #   COL1A1 = stromal/fibroblast/extracellular matrix
-    #   PTPRC  = pan-immune marker, also known as CD45
-    #   CD3D   = T-cell marker
-    #   MKI67  = proliferation marker
-    #
-    # These are not final annotations. They are only an initial biological
-    # inspection before clustering and formal marker-gene analysis.
+
+def plot_initial_marker_genes(adata) -> None:
+    """
+    Plot a small panel of biological marker genes.
+
+    Why this plot is included
+    -------------------------
+    Before formal clustering or differential expression, it is useful to check
+    whether expected breast cancer and tumor microenvironment signals are
+    spatially structured.
+
+    Marker examples
+    ---------------
+    EPCAM:
+        epithelial/tumor-associated
+
+    KRT18:
+        epithelial marker
+
+    COL1A1:
+        stromal/fibroblast/extracellular matrix
+
+    PTPRC:
+        pan-immune marker, also known as CD45
+
+    CD3D:
+        T-cell marker
+
+    MKI67:
+        proliferation marker
+
+    Alternative marker panels
+    -------------------------
+    A broader first-pass panel could include:
+
+        - KRT8, KRT19, MUC1 for epithelial/tumor signal
+        - CD74, HLA-DRA, C1QA for antigen-presenting/myeloid signal
+        - IGKC, JCHAIN for plasma-cell/B-cell signal
+        - FABP4, PLIN1 for adipocyte/fat-associated regions
+        - PGK1, LDHA, CA9 for hypoxia/glycolysis
+    """
     marker_genes = [
         "EPCAM",
         "KRT18",
@@ -302,27 +530,59 @@ def main() -> None:
         "MKI67",
     ]
 
-    # Some requested markers may not be present in the dataset after gene-name
-    # processing. Only plot genes that are available.
     available_markers = [gene for gene in marker_genes if gene in adata.var_names]
 
     print("\nAvailable marker genes:")
     print(available_markers)
 
-    # Generate spatial marker plots only if at least one marker is available.
-    if available_markers:
-        sc.pl.spatial(
-            adata,
-            color=available_markers,
-            library_id="Visium_Human_Breast_Cancer",
-            show=False,
-        )
-        save_current_fig("spatial_marker_genes.png")
+    if not available_markers:
+        print("No requested marker genes were found; skipping marker plot.")
+        return
+
+    sq.pl.spatial_scatter(
+        adata,
+        color=available_markers,
+        library_id=LIBRARY_ID,
+        img=True,
+    )
+    save_current_fig("spatial_marker_genes.png")
+
+
+def main() -> None:
+    """
+    Run Milestone 1.
+
+    Workflow
+    --------
+    1. Validate expected 10x Visium input files.
+    2. Load the dataset with Squidpy.
+    3. Add QC metrics with Scanpy.
+    4. Print dataset and QC summaries.
+    5. Save the raw-QC AnnData checkpoint.
+    6. Generate QC and marker-gene plots.
+    """
+    print(f"Loading Visium data from: {DATA_DIR}")
+
+    validate_visium_input_files()
+
+    adata = load_visium_with_squidpy()
+
+    adata = add_basic_qc_metrics(adata)
+
+    print_dataset_summary(adata)
+
+    out_h5ad = PROCESSED_DIR / "visium_human_breast_cancer_raw_qc.h5ad"
+    adata.write_h5ad(out_h5ad)
+    print(f"\nSaved QC AnnData object to: {out_h5ad}")
+
+    plot_qc_distributions(adata)
+    plot_spatial_qc_metrics(adata)
+    plot_initial_marker_genes(adata)
 
     print("\nDone. Initial QC figures saved to:")
     print(OUT_DIR)
 
-print("\nMilestone 1 complete.")
+    print("\nMilestone 1 complete.")
 
 
 if __name__ == "__main__":

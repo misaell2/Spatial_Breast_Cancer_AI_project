@@ -3,121 +3,73 @@ Milestone 5: Train baseline ML models for spatial niche classification.
 
 Purpose
 -------
-This script trains the first supervised machine learning models for the
-SpatialNicheAI project.
+This script trains and compares five supervised machine learning models for
+manual spatial niche classification.
 
-The goal is to learn a mapping from interpretable spot-level features to the
-manual biological niche labels created in the previous annotation step.
+The model learns:
 
-Conceptually, the model learns:
+    PCA expression features
+    + QC metrics
+    + spatial coordinates
+    + marker signature scores
+    + Squidpy spatial-neighborhood marker features
+        -> manually curated niche label
 
-    expression-derived features + QC metrics + spatial coordinates + marker scores
-        -> manual biological niche label
-
-Why this script exists
-----------------------
-The earlier analysis steps identify clusters and manually annotate those
-clusters using marker genes and spatial patterns. This script tests whether
-those manually interpreted biological niches can be predicted from quantitative
-features.
-
-This is intentionally a baseline modeling script. The goal is not to claim a
-final clinical model. The goal is to establish:
-
-    1. A reproducible ML training workflow.
-    2. A clear feature engineering strategy.
-    3. A first model comparison.
-    4. A saved model artifact.
-    5. Spatial prediction and confidence maps.
-    6. A foundation for more rigorous validation later.
+Important caution
+-----------------
+This is a baseline random train/test split. In spatial transcriptomics, random
+spot-level splits can overestimate performance because neighboring spots are
+correlated. Spatial holdout validation is handled in script 06.
 
 Input
 -----
-Final labeled AnnData object:
-
     data/processed/visium_human_breast_cancer_final_labeled.h5ad
 
-Expected important columns:
-    adata.obs["ml_training_label"]
-    adata.obs["manual_niche_label_short"]
-    adata.obs["manual_label_confidence"]
-
-Expected embeddings/coordinates:
-    adata.obsm["X_pca"]
-    adata.obsm["spatial"]
-
-Output
-------
-Prediction-annotated AnnData object:
-
+Outputs
+-------
     data/processed/visium_human_breast_cancer_ml_predictions.h5ad
-
-Model artifacts:
 
     models/baseline_spatial_niche_classifier.joblib
     models/baseline_label_encoder.joblib
     models/baseline_model_metadata.json
 
-Tables:
-
     results/tables/baseline_ml_model_metrics.csv
-    results/tables/logistic_regression_classification_report.csv
-    results/tables/random_forest_classification_report.csv
-    results/tables/baseline_random_forest_feature_importance.csv
     results/tables/baseline_ml_spot_predictions.csv
-
-Figures:
+    results/tables/baseline_ml_label_mapping.csv
+    results/tables/baseline_ml_feature_columns.csv
 
     results/figures/05_baseline_ml/
 
-Important scientific caution
-----------------------------
-The labels used here are weakly supervised labels derived from manual
-annotation of Leiden clusters. A random spot-level train/test split can
-overestimate performance in spatial transcriptomics because neighboring spots
-are correlated and labels are partly cluster-derived.
-
-That is why the next script performs spatial holdout validation:
-
-    src/modeling/06_spatial_holdout_validation.py
-
-Alternative modeling options
-----------------------------
-Future models could include:
-
-    - XGBoost / LightGBM
-    - support vector machines
-    - calibrated random forests
-    - elastic net multinomial logistic regression
-    - graph-based features from spatial neighbors
-    - graph neural networks
-    - H&E image patch features
-    - cross-sample validation using additional breast cancer Visium datasets
-
-Alternative feature options
----------------------------
-Future feature sets could include:
-
-    - more or fewer PCA components
-    - raw marker gene expression values
-    - pathway enrichment scores
-    - spatial-neighborhood averaged expression
-    - local spatial diversity features
-    - cell-type deconvolution proportions
-    - inferred CNV/tumor scores
-    - H&E image embeddings
+Models tested
+-------------
+1. Logistic regression
+2. Calibrated linear SVM
+3. Random forest
+4. Extra trees
+5. Histogram gradient boosting
 """
 
 from pathlib import Path
 import json
+import re
 
 import joblib
+import matplotlib
+
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
+import squidpy as sq
 
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.ensemble import (
+    ExtraTreesClassifier,
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -129,22 +81,14 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.svm import LinearSVC
 
 
 # ---------------------------------------------------------------------
-# Project paths
+# Paths
 # ---------------------------------------------------------------------
-# This script lives in:
-#   src/modeling/05_train_baseline_niche_classifier.py
-#
-# parents[2] moves from:
-#   src/modeling/ -> src/ -> project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# Final labeled object created by:
-#   src/analysis/04_apply_manual_annotations.py
-#
-# This object contains the manually curated labels used for supervised ML.
 INPUT_H5AD = (
     PROJECT_ROOT
     / "data"
@@ -152,7 +96,6 @@ INPUT_H5AD = (
     / "visium_human_breast_cancer_final_labeled.h5ad"
 )
 
-# Output object with model predictions added to adata.obs.
 OUTPUT_H5AD = (
     PROJECT_ROOT
     / "data"
@@ -160,7 +103,6 @@ OUTPUT_H5AD = (
     / "visium_human_breast_cancer_ml_predictions.h5ad"
 )
 
-# Output directories.
 FIGURE_DIR = PROJECT_ROOT / "results" / "figures" / "05_baseline_ml"
 TABLE_DIR = PROJECT_ROOT / "results" / "tables"
 MODEL_DIR = PROJECT_ROOT / "models"
@@ -171,43 +113,19 @@ MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------
-# Dataset and label metadata
+# Project constants
 # ---------------------------------------------------------------------
-# This should match the key in adata.uns["spatial"].
 LIBRARY_ID = "Visium_Human_Breast_Cancer"
 
-# Target label column created in the manual annotation step.
-# This column keeps high-confidence biological labels and groups uncertain
-# clusters under EXCLUDE_LABEL.
 LABEL_KEY = "ml_training_label"
-
-# Spots with this label are excluded from supervised model training.
-# They are still predicted after training so we can inspect what the model
-# would assign to uncertain/review regions.
 EXCLUDE_LABEL = "Exclude_low_confidence"
 
+SPATIAL_CONNECTIVITY_KEY = "spatial_connectivities"
+
 
 # ---------------------------------------------------------------------
-# Marker sets for feature engineering
+# Marker sets used as interpretable ML features
 # ---------------------------------------------------------------------
-# These marker sets are converted into per-spot signature scores and used as
-# interpretable ML features.
-#
-# Why use marker scores as features?
-#   PCA features capture global expression variation, but marker scores encode
-#   biologically interpretable programs. This makes the model more explainable
-#   and lets feature importance highlight meaningful signatures.
-#
-# Important:
-#   Marker scores are not pure cell-type proportions. Visium spots can contain
-#   mixtures of cell types, and scores should be interpreted as relative
-#   program activity.
-#
-# Future alternatives:
-#   - Use pathway scores instead of marker scores.
-#   - Add spatial-neighborhood averaged marker scores.
-#   - Use deconvolution-derived cell-type proportions.
-#   - Use raw expression for a curated marker panel.
 MARKER_SETS = {
     "tumor_epithelial": [
         "EPCAM",
@@ -307,46 +225,84 @@ MARKER_SETS = {
 }
 
 
+def safe_name(text: str) -> str:
+    """Convert model names into filename-safe strings."""
+    text = str(text)
+    text = re.sub(r"[^A-Za-z0-9_\-]+", "_", text)
+    return text.strip("_")
+
+
 def save_current_fig(filename: str) -> None:
-    """
-    Save the active matplotlib figure and close it.
-
-    Why this helper exists
-    ----------------------
-    This script generates many figures. Centralizing save behavior ensures all
-    plots use the same DPI, output directory, and closing behavior.
-
-    Alternative parameters:
-        dpi=150  for smaller files
-        dpi=300  for GitHub/presentation-quality figures
-        dpi=600  for print-quality figures, but larger files
-    """
+    """Save and close the active matplotlib figure."""
     out_path = FIGURE_DIR / filename
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close()
     print(f"Saved figure: {out_path}")
 
 
+def plot_spatial_scatter(
+    adata,
+    color,
+    filename: str,
+    img: bool = True,
+    legend_loc: str | None = "right margin",
+    ncols: int = 3,
+) -> None:
+    """
+    Plot spatial data with Squidpy.
+
+    Note
+    ----
+    Do not pass show=False to sq.pl.spatial_scatter in this environment because
+    unsupported plotting arguments can be forwarded to Matplotlib.
+    """
+    kwargs = {
+        "adata": adata,
+        "color": color,
+        "library_id": LIBRARY_ID,
+        "img": img,
+        "ncols": ncols,
+    }
+
+    if legend_loc is not None:
+        kwargs["legend_loc"] = legend_loc
+
+    sq.pl.spatial_scatter(**kwargs)
+    save_current_fig(filename)
+
+
+def validate_inputs(adata) -> None:
+    """Check required fields before model training."""
+    required_obs = [
+        LABEL_KEY,
+        "manual_niche_label_short",
+        "manual_label_confidence",
+    ]
+
+    missing_obs = [col for col in required_obs if col not in adata.obs.columns]
+    if missing_obs:
+        raise ValueError(f"Missing required adata.obs columns: {missing_obs}")
+
+    if "X_pca" not in adata.obsm:
+        raise ValueError("Missing adata.obsm['X_pca'].")
+
+    if "spatial" not in adata.obsm:
+        raise ValueError("Missing adata.obsm['spatial'].")
+
+    if SPATIAL_CONNECTIVITY_KEY not in adata.obsp:
+        print(
+            f"Warning: {SPATIAL_CONNECTIVITY_KEY} not found. "
+            "Neighborhood marker features will be skipped."
+        )
+
+
 def get_available_genes(adata, genes: list[str]) -> list[str]:
     """
-    Return marker genes that are present in the AnnData object.
+    Return marker genes present in the AnnData object.
 
-    Why this function exists
-    ------------------------
-    Some genes may be missing because of gene filtering, gene symbol handling,
-    or HVG subsetting. Using only available genes prevents Scanpy from failing
-    when scoring marker sets.
-
-    Why use adata.raw?
-    ------------------
-    The processed AnnData object was subset to highly variable genes for PCA
-    and clustering. Marker genes are not guaranteed to be HVGs. `adata.raw`
-    preserves the full normalized/log-transformed expression matrix before HVG
-    subsetting, so it is preferred for marker scoring.
-
-    Alternative:
-        If using Ensembl IDs, add a symbol-to-Ensembl mapping step before
-        checking gene availability.
+    adata.raw is preferred because the active object was subset to highly
+    variable genes, while adata.raw preserves the full normalized expression
+    matrix.
     """
     if adata.raw is not None:
         available = set(adata.raw.var_names)
@@ -360,30 +316,10 @@ def add_marker_signature_scores(adata):
     """
     Add marker signature scores to adata.obs.
 
-    Why this step is included
-    -------------------------
-    Marker signature scores provide interpretable biological features for the
-    ML model. They complement PCA features, which are useful but less directly
-    interpretable.
-
-    The resulting columns have names like:
+    These are interpretable biological features, such as:
         score_tumor_epithelial
         score_myeloid_apc
-        score_adipocyte_fat
-
-    How Scanpy scoring works
-    ------------------------
-    `sc.tl.score_genes` compares the expression of a marker gene list against
-    a set of control genes with similar expression levels. The score is useful
-    as a relative enrichment-like signal.
-
-    Alternative feature approaches
-    ------------------------------
-    - Use raw expression of marker genes directly.
-    - Use pathway scores from MSigDB/Hallmark gene sets.
-    - Use AUCell, ssGSEA, GSVA, or decoupler scores.
-    - Use deconvolution proportions from a breast cancer scRNA-seq reference.
-    - Compute spatial-neighborhood averaged marker scores.
+        score_hypoxia_glycolysis
     """
     score_columns = []
 
@@ -393,9 +329,6 @@ def add_marker_signature_scores(adata):
         print(f"\nSignature: {signature_name}")
         print(f"  Available genes: {available_genes}")
 
-        # Require at least two genes so that a score is not driven by a single
-        # marker. For highly specific rare markers, a one-gene feature could be
-        # useful, but it should be interpreted cautiously.
         if len(available_genes) < 2:
             print("  Skipping: fewer than 2 genes available.")
             continue
@@ -414,172 +347,213 @@ def add_marker_signature_scores(adata):
     return adata, score_columns
 
 
+def make_neighbor_score_features(
+    adata,
+    score_columns: list[str],
+) -> pd.DataFrame:
+    """
+    Use the Squidpy spatial graph to calculate neighbor-averaged marker scores.
+
+    For each marker score column:
+        neighbor_mean_score_X = average score_X among spatial neighbors
+
+    These features add local tissue context to the ML feature matrix.
+    """
+    if SPATIAL_CONNECTIVITY_KEY not in adata.obsp or not score_columns:
+        return pd.DataFrame(index=adata.obs_names)
+
+    print("\nCreating Squidpy spatial-neighborhood score features...")
+
+    graph = adata.obsp[SPATIAL_CONNECTIVITY_KEY].copy()
+
+    row_sums = np.asarray(graph.sum(axis=1)).ravel()
+    row_sums[row_sums == 0] = 1.0
+
+    graph_normalized = graph.multiply(1.0 / row_sums[:, None])
+
+    score_matrix = adata.obs[score_columns].astype(float).to_numpy()
+    neighbor_scores = graph_normalized.dot(score_matrix)
+
+    neighbor_columns = [f"neighbor_mean_{col}" for col in score_columns]
+
+    neighbor_df = pd.DataFrame(
+        neighbor_scores,
+        index=adata.obs_names,
+        columns=neighbor_columns,
+    )
+
+    print(f"  Added {neighbor_df.shape[1]} neighborhood features.")
+
+    return neighbor_df
+
+
 def build_feature_table(
     adata,
     score_columns: list[str],
     n_pcs: int = 30,
 ) -> pd.DataFrame:
     """
-    Build the feature matrix used for supervised ML.
+    Build the supervised ML feature table.
 
-    Feature groups
-    --------------
-    1. PCA coordinates
-    2. QC metrics
-    3. spatial coordinates
-    4. marker signature scores
-
-    Why these features are included
-    -------------------------------
-    PCA coordinates:
-        Capture broad gene expression variation while reducing dimensionality.
-        This avoids training directly on tens of thousands of genes for a small
-        number of spots.
-
-    QC metrics:
-        Help the model account for technical variation such as library size or
-        detected gene count. Including QC features can be informative, but they
-        should be interpreted cautiously because a model could learn technical
-        artifacts.
-
-    Spatial coordinates:
-        Provide positional information. This can help predict tissue regions,
-        but it can also encourage memorization of this specific tissue section.
-        The spatial holdout script later tests robustness with and without
-        spatial coordinates.
-
-    Marker signature scores:
-        Provide interpretable biological signal that aligns with the manual
-        annotation process.
-
-    Important limitation
-    --------------------
-    This feature set is still single-sample. A model trained this way may not
-    generalize to another patient or tissue section without external validation.
-
-    Alternative parameters
-    ----------------------
-    n_pcs:
-        - 10 or 20: simpler model, less noise
-        - 30: current balanced choice
-        - 50: more variation, possible overfitting
-
-    Alternative feature sets:
-        - omit spatial_x/spatial_y
-        - add spatial-neighborhood averages
-        - add graph connectivity features
-        - add raw curated marker expression
-        - add pathway scores
-        - add H&E image features
+    Feature groups:
+        1. PCA coordinates
+        2. QC metrics
+        3. spatial coordinates
+        4. marker signature scores
+        5. neighbor-averaged marker signature scores
     """
-    if "X_pca" not in adata.obsm:
-        raise ValueError("Expected PCA coordinates in adata.obsm['X_pca'].")
-
-    # Use the first n_pcs principal components.
-    # These are compact expression-derived features.
     pcs = adata.obsm["X_pca"][:, :n_pcs]
     pc_cols = [f"PC{i + 1}" for i in range(pcs.shape[1])]
-    pc_df = pd.DataFrame(pcs, index=adata.obs_names, columns=pc_cols)
 
-    # QC features are included because library size and detection rate can
-    # influence expression-derived features. They also help diagnose whether
-    # the model is relying heavily on technical variation.
-    qc_cols = [
+    pc_df = pd.DataFrame(
+        pcs,
+        index=adata.obs_names,
+        columns=pc_cols,
+    )
+
+    possible_qc_cols = [
         "total_counts",
         "n_genes_by_counts",
         "pct_counts_mt",
+        "pct_counts_ribo",
+        "pct_counts_hb",
+        "pct_counts_in_top_50_genes",
+        "pct_counts_in_top_100_genes",
+        "pct_counts_in_top_200_genes",
     ]
 
-    missing_qc = [col for col in qc_cols if col not in adata.obs.columns]
-    if missing_qc:
-        raise ValueError(f"Missing QC columns: {missing_qc}")
+    qc_cols = [col for col in possible_qc_cols if col in adata.obs.columns]
 
-    qc_df = adata.obs[qc_cols].copy()
+    if not qc_cols:
+        raise ValueError("No QC columns found for feature construction.")
 
-    # Spatial coordinates describe each spot's physical location in the tissue
-    # image coordinate system.
-    #
-    # Note:
-    #   These features are useful for within-sample prediction, but they can
-    #   inflate performance if the model memorizes tissue position. That is why
-    #   the next script compares holdout performance with and without them.
-    spatial = adata.obsm["spatial"]
+    qc_df = adata.obs[qc_cols].astype(float).copy()
+
     spatial_df = pd.DataFrame(
-        spatial,
+        adata.obsm["spatial"],
         index=adata.obs_names,
         columns=["spatial_x", "spatial_y"],
     )
 
-    # Marker scores created by add_marker_signature_scores.
-    signature_df = adata.obs[score_columns].copy()
+    signature_df = adata.obs[score_columns].astype(float).copy()
 
-    # Concatenate all feature groups into one model-ready table.
+    neighbor_df = make_neighbor_score_features(
+        adata=adata,
+        score_columns=score_columns,
+    )
+
     features = pd.concat(
         [
             pc_df,
             qc_df,
             spatial_df,
             signature_df,
+            neighbor_df,
         ],
         axis=1,
     )
 
-    # Clean unexpected numerical issues.
-    #
-    # Why median imputation?
-    #   For numeric features, the median is robust to outliers and avoids
-    #   dropping spots if a rare missing value appears.
-    #
-    # Alternatives:
-    #   - mean imputation
-    #   - KNN imputation
-    #   - dropping rows with missing values
-    #   - fitting a scikit-learn SimpleImputer inside a Pipeline
     features = features.replace([np.inf, -np.inf], np.nan)
     features = features.fillna(features.median(numeric_only=True))
 
     return features
 
 
+def define_models() -> dict:
+    """
+    Define five candidate classifiers.
+
+    Models:
+        1. Logistic regression
+        2. Calibrated linear SVM
+        3. Random forest
+        4. Extra trees
+        5. Histogram gradient boosting
+    """
+    logistic_regression = Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            (
+                "classifier",
+                LogisticRegression(
+                    max_iter=5000,
+                    class_weight="balanced",
+                    solver="lbfgs",
+                ),
+            ),
+        ]
+    )
+
+    calibrated_linear_svm = Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            (
+                "classifier",
+                CalibratedClassifierCV(
+                    estimator=LinearSVC(
+                        class_weight="balanced",
+                        max_iter=10000,
+                        random_state=42,
+                    ),
+                    cv=3,
+                ),
+            ),
+        ]
+    )
+
+    random_forest = RandomForestClassifier(
+        n_estimators=500,
+        random_state=42,
+        class_weight="balanced",
+        n_jobs=-1,
+        min_samples_leaf=3,
+    )
+
+    extra_trees = ExtraTreesClassifier(
+        n_estimators=500,
+        random_state=42,
+        class_weight="balanced",
+        n_jobs=-1,
+        min_samples_leaf=3,
+    )
+
+    hist_gradient_boosting = HistGradientBoostingClassifier(
+        max_iter=300,
+        learning_rate=0.05,
+        max_leaf_nodes=31,
+        l2_regularization=0.1,
+        class_weight="balanced",
+        random_state=42,
+    )
+
+    return {
+        "logistic_regression": logistic_regression,
+        "calibrated_linear_svm": calibrated_linear_svm,
+        "random_forest": random_forest,
+        "extra_trees": extra_trees,
+        "hist_gradient_boosting": hist_gradient_boosting,
+    }
+    
 def plot_confusion_matrix(
     cm: np.ndarray,
     labels: list[str],
     title: str,
     filename: str,
 ) -> None:
-    """
-    Plot a confusion matrix.
-
-    Why this plot is included
-    -------------------------
-    Overall metrics can hide class-specific mistakes. A confusion matrix shows
-    which biological niches are confused with each other.
-
-    For this project, confusion patterns are biologically meaningful. For
-    example, confusing two epithelial-like tumor states may be less concerning
-    than confusing immune and tumor regions.
-
-    Alternative visualization options
-    ---------------------------------
-    - normalized confusion matrix by true label
-    - normalized confusion matrix by predicted label
-    - seaborn heatmap with annotations
-    - per-class precision/recall bar plots
-    """
-    fig, ax = plt.subplots(figsize=(9, 8))
+    """Plot a raw-count confusion matrix."""
+    fig, ax = plt.subplots(figsize=(10, 9))
     im = ax.imshow(cm, interpolation="nearest")
-
+ 
     ax.set_title(title)
     ax.set_xlabel("Predicted label")
     ax.set_ylabel("True label")
-
+ 
     ax.set_xticks(np.arange(len(labels)))
     ax.set_yticks(np.arange(len(labels)))
-
+ 
     ax.set_xticklabels(labels, rotation=45, ha="right")
     ax.set_yticklabels(labels)
-
-    # Add raw counts to each confusion matrix cell.
+ 
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
             ax.text(
@@ -590,83 +564,11 @@ def plot_confusion_matrix(
                 va="center",
                 fontsize=8,
             )
-
+ 
     fig.colorbar(im, ax=ax)
     save_current_fig(filename)
-
-
-def plot_feature_importance(
-    model,
-    feature_names: list[str],
-    filename: str,
-    top_n: int = 30,
-) -> None:
-    """
-    Plot random forest feature importance.
-
-    Why this is included
-    --------------------
-    Feature importance helps interpret what the random forest used to separate
-    niche labels. This is important because the project is meant to be
-    biologically interpretable, not just predictive.
-
-    Important limitation
-    --------------------
-    Random forest impurity-based feature importance can be biased toward
-    continuous variables or variables with many possible split points. It is a
-    useful first-pass diagnostic, not definitive biological proof.
-
-    Alternative interpretation methods
-    ----------------------------------
-    - permutation importance
-    - SHAP values
-    - logistic regression coefficients
-    - one-vs-rest feature importance per class
-    - ablation testing by removing feature groups
-    - comparing models with and without spatial coordinates
-
-    Parameters
-    ----------
-    top_n:
-        Number of top features to show in the plot.
-        Useful values:
-            20 for a compact README figure
-            30 for a balanced summary
-            50 for deeper exploratory analysis
-    """
-    if not hasattr(model, "feature_importances_"):
-        print("Model does not expose feature_importances_; skipping plot.")
-        return
-
-    importances = pd.Series(
-        model.feature_importances_,
-        index=feature_names,
-    ).sort_values(ascending=False)
-
-    top_importances = importances.head(top_n).sort_values(ascending=True)
-
-    fig, ax = plt.subplots(figsize=(8, 8))
-    top_importances.plot(kind="barh", ax=ax)
-    ax.set_xlabel("Feature importance")
-    ax.set_ylabel("Feature")
-    ax.set_title(f"Top {top_n} feature importances")
-    save_current_fig(filename)
-
-    importance_path = TABLE_DIR / "baseline_random_forest_feature_importance.csv"
-
-    # This pandas-compatible form avoids using reset_index(names=...), which
-    # failed in one earlier environment.
-    importance_df = (
-        importances
-        .rename("importance")
-        .reset_index()
-        .rename(columns={"index": "feature"})
-    )
-
-    importance_df.to_csv(importance_path, index=False)
-    print(f"Saved feature importances to: {importance_path}")
-
-
+ 
+ 
 def evaluate_model(
     model_name: str,
     model,
@@ -677,201 +579,235 @@ def evaluate_model(
     label_names: list[str],
 ):
     """
-    Train and evaluate a supervised classifier.
-
-    Why this function exists
-    ------------------------
-    Both baseline models should be evaluated in the same way. This helper
-    keeps model comparison consistent.
-
-    Metrics
-    -------
+    Fit one model and save metrics, classification report, and confusion matrix.
+ 
+    Why these metrics are used
+    --------------------------
     accuracy:
-        Fraction of correctly classified spots. Easy to understand, but can be
-        misleading with class imbalance.
-
+        Overall fraction of correct predictions. Easy to understand, but can be
+        inflated by large classes.
+ 
     balanced_accuracy:
-        Average recall across classes. More useful when some niche classes are
-        much smaller than others.
-
+        Average recall across classes. Useful for imbalanced labels.
+ 
     macro_f1:
-        F1 score averaged equally across classes. This is the main model
-        selection metric because it prevents large classes from dominating the
-        comparison.
-
+        F1 score averaged equally across classes. This is the main comparison
+        metric because each biological niche should matter.
+ 
     weighted_f1:
-        F1 score weighted by class frequency. Useful for overall performance,
-        but can hide poor performance on rare classes.
-
-    Alternative evaluation options
-    ------------------------------
-    - cross-validation
-    - spatial holdout validation
-    - per-class ROC-AUC in one-vs-rest form
-    - top-k accuracy
-    - calibration curves
-    - precision-recall curves for rare classes
+        F1 score weighted by class size. Useful for overall performance, but it
+        can hide poor performance on rare classes.
     """
     print(f"\nTraining model: {model_name}")
-
-    # Fit the model using only high-confidence labeled spots.
+ 
     model.fit(X_train, y_train)
-
-    # Predict labels for the held-out random test set.
     y_pred = model.predict(X_test)
-
+ 
+    labels = list(range(len(label_names)))
+ 
     metrics = {
         "model": model_name,
         "accuracy": float(accuracy_score(y_test, y_pred)),
         "balanced_accuracy": float(balanced_accuracy_score(y_test, y_pred)),
-        "macro_f1": float(f1_score(y_test, y_pred, average="macro")),
-        "weighted_f1": float(f1_score(y_test, y_pred, average="weighted")),
+        "macro_f1": float(
+            f1_score(
+                y_test,
+                y_pred,
+                labels=labels,
+                average="macro",
+                zero_division=0,
+            )
+        ),
+        "weighted_f1": float(
+            f1_score(
+                y_test,
+                y_pred,
+                labels=labels,
+                average="weighted",
+                zero_division=0,
+            )
+        ),
     }
-
+ 
     print(f"\n{model_name} metrics:")
     for key, value in metrics.items():
         if key != "model":
             print(f"  {key}: {value:.4f}")
-
-    # Save a detailed per-class report.
+ 
     report = classification_report(
         y_test,
         y_pred,
+        labels=labels,
         target_names=label_names,
         output_dict=True,
         zero_division=0,
     )
-
+ 
     report_df = pd.DataFrame(report).transpose()
-    report_path = TABLE_DIR / f"{model_name}_classification_report.csv"
+    report_path = TABLE_DIR / f"{safe_name(model_name)}_classification_report.csv"
     report_df.to_csv(report_path)
     print(f"Saved classification report to: {report_path}")
-
-    # Save confusion matrix plot.
-    cm = confusion_matrix(y_test, y_pred)
+ 
+    cm = confusion_matrix(y_test, y_pred, labels=labels)
+ 
     plot_confusion_matrix(
-        cm,
+        cm=cm,
         labels=label_names,
         title=f"{model_name} confusion matrix",
-        filename=f"{model_name}_confusion_matrix.png",
+        filename=f"{safe_name(model_name)}_confusion_matrix.png",
     )
-
+ 
     return metrics, model
-
-
+ 
+ 
+def plot_model_comparison(metrics_df: pd.DataFrame) -> None:
+    """Create model comparison plots."""
+    metric_cols = [
+        "accuracy",
+        "balanced_accuracy",
+        "macro_f1",
+        "weighted_f1",
+    ]
+ 
+    plot_df = metrics_df.set_index("model")[metric_cols]
+    plot_df = plot_df.sort_values("macro_f1", ascending=True)
+ 
+    fig, ax = plt.subplots(figsize=(10, 7))
+    plot_df["macro_f1"].plot(kind="barh", ax=ax)
+    ax.set_xlabel("Macro F1")
+    ax.set_ylabel("Model")
+    ax.set_title("Model comparison by macro F1")
+    ax.set_xlim(0, 1.05)
+    save_current_fig("model_comparison_macro_f1.png")
+ 
+    fig, ax = plt.subplots(figsize=(10, 7))
+    plot_df[metric_cols].plot(kind="barh", ax=ax)
+    ax.set_xlabel("Score")
+    ax.set_ylabel("Model")
+    ax.set_title("Baseline ML model comparison")
+    ax.set_xlim(0, 1.05)
+    ax.legend(loc="lower right")
+    save_current_fig("model_comparison_all_metrics.png")
+ 
+ 
+def plot_tree_feature_importance(
+    model_name: str,
+    model,
+    feature_names: list[str],
+    top_n: int = 30,
+) -> None:
+    """
+    Save and plot feature importance for tree models.
+ 
+    Important limitation
+    --------------------
+    Tree impurity-based feature importance is useful as a first-pass model
+    interpretation tool, but it should not be treated as definitive biological
+    proof. Future improvements could use permutation importance, SHAP values,
+    or feature-group ablation.
+    """
+    if not hasattr(model, "feature_importances_"):
+        print(f"{model_name} does not expose feature_importances_; skipping.")
+        return
+ 
+    importances = pd.Series(
+        model.feature_importances_,
+        index=feature_names,
+    ).sort_values(ascending=False)
+ 
+    importance_df = (
+        importances
+        .rename("importance")
+        .reset_index()
+        .rename(columns={"index": "feature"})
+    )
+ 
+    importance_path = TABLE_DIR / f"{safe_name(model_name)}_feature_importance.csv"
+    importance_df.to_csv(importance_path, index=False)
+    print(f"Saved feature importances to: {importance_path}")
+ 
+    top_importances = importances.head(top_n).sort_values(ascending=True)
+ 
+    fig, ax = plt.subplots(figsize=(8, 8))
+    top_importances.plot(kind="barh", ax=ax)
+    ax.set_xlabel("Feature importance")
+    ax.set_ylabel("Feature")
+    ax.set_title(f"{model_name}: top {top_n} feature importances")
+    save_current_fig(f"{safe_name(model_name)}_feature_importance.png")
+ 
+ 
 def main() -> None:
-    """
-    Train baseline models and generate predictions.
-
-    Workflow
-    --------
-    1. Load final labeled AnnData object.
-    2. Add marker signature scores.
-    3. Build ML feature matrix.
-    4. Exclude low-confidence labels from training.
-    5. Encode labels for scikit-learn.
-    6. Create a stratified train/test split.
-    7. Train logistic regression and random forest models.
-    8. Select the best model by macro F1.
-    9. Save model artifacts and metadata.
-    10. Predict labels for every spot, including excluded spots.
-    11. Save prediction tables and plots.
-    """
+    """Run the full five-model baseline ML workflow."""
     print(f"Loading final labeled AnnData object from: {INPUT_H5AD}")
-
-    # Load the final labeled object from Milestone 3.5.
+ 
     adata = sc.read_h5ad(INPUT_H5AD)
-
+ 
     print("\nLoaded object:")
     print(adata)
-
-    # Fail early if the target label column is missing.
-    if LABEL_KEY not in adata.obs.columns:
-        raise ValueError(f"Could not find label column: {LABEL_KEY}")
-
+ 
+    validate_inputs(adata)
+ 
     print("\nOriginal ML label counts:")
     print(adata.obs[LABEL_KEY].value_counts())
-
+ 
     # ------------------------------------------------------------------
     # 1. Add marker signature scores
     # ------------------------------------------------------------------
-    # These scores are used as interpretable biological features.
     adata, score_columns = add_marker_signature_scores(adata)
-
+ 
     print("\nMarker signature score columns:")
     print(score_columns)
-
+ 
     # ------------------------------------------------------------------
-    # 2. Build feature matrix
+    # 2. Build features
     # ------------------------------------------------------------------
-    # X_all contains features for every spot, including low-confidence spots.
-    # We train on high-confidence spots only, but later predict all spots.
     X_all = build_feature_table(
-        adata,
+        adata=adata,
         score_columns=score_columns,
         n_pcs=30,
     )
-
+ 
     y_all = adata.obs[LABEL_KEY].astype(str)
-
-    # Save a small feature preview for transparency and debugging.
-    # The full feature matrix is not saved by default to avoid unnecessary
-    # large intermediate files.
-    feature_table_path = TABLE_DIR / "baseline_ml_feature_table_preview.csv"
-    X_all.head(50).to_csv(feature_table_path)
-    print(f"\nSaved feature table preview to: {feature_table_path}")
-
+ 
+    X_all.head(50).to_csv(TABLE_DIR / "baseline_ml_feature_table_preview.csv")
+ 
+    pd.DataFrame({"feature": X_all.columns.tolist()}).to_csv(
+        TABLE_DIR / "baseline_ml_feature_columns.csv",
+        index=False,
+    )
+ 
+    print(f"\nFeature matrix shape: {X_all.shape}")
+ 
     # ------------------------------------------------------------------
-    # 3. Exclude low-confidence labels for supervised training
+    # 3. Exclude low-confidence labels from training
     # ------------------------------------------------------------------
-    # Low-confidence/review spots are not used to fit the model because their
-    # labels were explicitly marked as uncertain or mixed.
-    #
-    # Alternative:
-    #   Keep low-confidence spots as an "Uncertain" class, but that would train
-    #   the model to reproduce uncertainty rather than clear biological niches.
     train_mask = y_all != EXCLUDE_LABEL
-
+ 
     X = X_all.loc[train_mask].copy()
     y = y_all.loc[train_mask].copy()
-
+ 
     print("\nTraining label counts after excluding low-confidence spots:")
     print(y.value_counts())
-
-    # scikit-learn classifiers usually expect numeric labels.
-    # LabelEncoder provides a stable mapping between class names and integers.
+ 
     label_encoder = LabelEncoder()
     y_encoded = label_encoder.fit_transform(y)
     label_names = label_encoder.classes_.tolist()
-
-    # Save label mapping so model outputs can be interpreted later.
+ 
     label_mapping = pd.DataFrame(
         {
             "encoded_label": range(len(label_names)),
             "label_name": label_names,
         }
     )
-
-    label_mapping_path = TABLE_DIR / "baseline_ml_label_mapping.csv"
-    label_mapping.to_csv(label_mapping_path, index=False)
-    print(f"Saved label mapping to: {label_mapping_path}")
-
+ 
+    label_mapping.to_csv(
+        TABLE_DIR / "baseline_ml_label_mapping.csv",
+        index=False,
+    )
+ 
     # ------------------------------------------------------------------
-    # 4. Stratified train/test split
+    # 4. Random stratified split
     # ------------------------------------------------------------------
-    # Stratification preserves approximate class proportions in train and test.
-    #
-    # Current choice:
-    #   test_size=0.25 gives a 75/25 split.
-    #
-    # Alternative useful parameters:
-    #   test_size=0.20 for more training data
-    #   test_size=0.30 for a larger evaluation set
-    #   random_state values other than 42 to check stability
-    #
-    # Important limitation:
-    #   This split is random across spots and may overestimate performance
-    #   because nearby spots are spatially correlated.
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y_encoded,
@@ -879,75 +815,20 @@ def main() -> None:
         random_state=42,
         stratify=y_encoded,
     )
-
+ 
     print("\nTrain/test sizes:")
     print(f"  Train: {X_train.shape[0]}")
     print(f"  Test:  {X_test.shape[0]}")
     print(f"  Features: {X_train.shape[1]}")
-
+ 
     # ------------------------------------------------------------------
-    # 5. Define baseline models
+    # 5. Train and compare five models
     # ------------------------------------------------------------------
-    # Logistic regression:
-    #   A simple, interpretable linear baseline.
-    #   StandardScaler is needed because logistic regression is sensitive to
-    #   feature scale.
-    #
-    # Random forest:
-    #   A nonlinear baseline that can capture interactions between PCA features,
-    #   marker scores, QC metrics, and spatial coordinates.
-    #
-    # Why compare both?
-    #   If logistic regression performs similarly to random forest, the class
-    #   boundaries may be mostly linear in the engineered feature space. If
-    #   random forest performs better, nonlinear interactions may help.
-    logistic_regression = Pipeline(
-        steps=[
-            ("scaler", StandardScaler()),
-            (
-                "classifier",
-                LogisticRegression(
-                    max_iter=3000,
-                    class_weight="balanced",
-                    solver="lbfgs",
-                ),
-            ),
-        ]
-    )
-
-    # Random forest parameter notes:
-    #   n_estimators=500
-    #       More trees usually stabilize performance, but increase runtime.
-    #       Alternatives: 100, 300, 1000.
-    #
-    #   class_weight="balanced"
-    #       Helps account for label imbalance.
-    #
-    #   min_samples_leaf=3
-    #       Reduces overly specific leaves and helps prevent overfitting.
-    #       Alternatives: 1 for more flexible trees, 5 or 10 for smoother trees.
-    #
-    #   n_jobs=-1
-    #       Use all available CPU cores.
-    random_forest = RandomForestClassifier(
-        n_estimators=500,
-        random_state=42,
-        class_weight="balanced",
-        n_jobs=-1,
-        min_samples_leaf=3,
-    )
-
-    models = {
-        "logistic_regression": logistic_regression,
-        "random_forest": random_forest,
-    }
-
-    # ------------------------------------------------------------------
-    # 6. Train and evaluate
-    # ------------------------------------------------------------------
+    models = define_models()
+ 
     all_metrics = []
     fitted_models = {}
-
+ 
     for model_name, model in models.items():
         metrics, fitted_model = evaluate_model(
             model_name=model_name,
@@ -958,144 +839,127 @@ def main() -> None:
             y_test=y_test,
             label_names=label_names,
         )
+ 
         all_metrics.append(metrics)
         fitted_models[model_name] = fitted_model
-
-    # Select best model by macro F1 because classes are imbalanced and rare
-    # niche classes should matter.
+ 
     metrics_df = pd.DataFrame(all_metrics).sort_values(
         "macro_f1",
         ascending=False,
     )
-
-    metrics_path = TABLE_DIR / "baseline_ml_model_metrics.csv"
-    metrics_df.to_csv(metrics_path, index=False)
-    print(f"\nSaved model metrics to: {metrics_path}")
-
+ 
+    metrics_df.to_csv(
+        TABLE_DIR / "baseline_ml_model_metrics.csv",
+        index=False,
+    )
+ 
     print("\nModel comparison:")
     print(metrics_df)
-
-    best_model_name = metrics_df.iloc[0]["model"]
-    best_model = fitted_models[best_model_name]
-
-    print(f"\nBest model by macro F1: {best_model_name}")
-
-    # Random forest exposes feature_importances_, so plot it for interpretability.
-    if "random_forest" in fitted_models:
-        plot_feature_importance(
-            fitted_models["random_forest"],
-            feature_names=X.columns,
-            filename="random_forest_feature_importance.png",
+ 
+    plot_model_comparison(metrics_df)
+ 
+    for model_name, fitted_model in fitted_models.items():
+        plot_tree_feature_importance(
+            model_name=model_name,
+            model=fitted_model,
+            feature_names=X.columns.tolist(),
             top_n=30,
         )
-
+ 
     # ------------------------------------------------------------------
-    # 7. Save best model and metadata
+    # 6. Select best model by macro F1
     # ------------------------------------------------------------------
-    # Saving both the model and label encoder is important because numeric
-    # predictions must be mapped back to label names.
+    best_model_name = metrics_df.iloc[0]["model"]
+    best_model = fitted_models[best_model_name]
+ 
+    print(f"\nBest model by macro F1: {best_model_name}")
+ 
     model_path = MODEL_DIR / "baseline_spatial_niche_classifier.joblib"
-    joblib.dump(best_model, model_path)
-    print(f"Saved best model to: {model_path}")
-
     encoder_path = MODEL_DIR / "baseline_label_encoder.joblib"
+    metadata_path = MODEL_DIR / "baseline_model_metadata.json"
+ 
+    joblib.dump(best_model, model_path)
     joblib.dump(label_encoder, encoder_path)
-    print(f"Saved label encoder to: {encoder_path}")
-
-    # Metadata makes the model artifact more reproducible.
-    # It records:
-    #   - which model was selected
-    #   - which label column was used
-    #   - which label was excluded
-    #   - feature columns used during training
-    #   - class names
-    #   - evaluation metrics
+ 
     metadata = {
         "best_model": best_model_name,
         "label_key": LABEL_KEY,
         "excluded_label": EXCLUDE_LABEL,
+        "n_all_spots": int(X_all.shape[0]),
+        "n_training_spots": int(X.shape[0]),
+        "n_features": int(X.shape[1]),
         "feature_columns": X.columns.tolist(),
         "label_names": label_names,
         "metrics": metrics_df.to_dict(orient="records"),
+        "feature_groups": {
+            "pca": "PC1-PC30",
+            "qc": "available QC metrics",
+            "spatial_coordinates": ["spatial_x", "spatial_y"],
+            "marker_scores": score_columns,
+            "squidpy_neighbor_marker_scores": [
+                col for col in X.columns if col.startswith("neighbor_mean_")
+            ],
+        },
     }
-
-    metadata_path = MODEL_DIR / "baseline_model_metadata.json"
+ 
     with open(metadata_path, "w", encoding="utf-8") as handle:
         json.dump(metadata, handle, indent=2)
-
+ 
+    print(f"Saved best model to: {model_path}")
+    print(f"Saved label encoder to: {encoder_path}")
     print(f"Saved model metadata to: {metadata_path}")
-
+ 
     # ------------------------------------------------------------------
-    # 8. Predict every spot, including low-confidence/review spots
+    # 7. Predict every spot, including excluded/review spots
     # ------------------------------------------------------------------
-    # The model is trained only on high-confidence spots, but we apply it to
-    # all spots to see what label the model assigns to uncertain regions.
-    #
-    # Prediction confidence:
-    #   For models with predict_proba, confidence is the highest predicted
-    #   class probability.
-    #
-    # Important limitation:
-    #   Random forest probabilities are not always well-calibrated.
-    #
-    # Alternative:
-    #   Use CalibratedClassifierCV for better probability calibration.
+    pred_encoded_all = best_model.predict(X_all)
+ 
     if hasattr(best_model, "predict_proba"):
-        pred_encoded_all = best_model.predict(X_all)
         pred_proba_all = best_model.predict_proba(X_all)
         pred_confidence_all = pred_proba_all.max(axis=1)
     else:
-        pred_encoded_all = best_model.predict(X_all)
-        pred_confidence_all = np.full(shape=X_all.shape[0], fill_value=np.nan)
-
+        pred_confidence_all = np.full(X_all.shape[0], np.nan)
+ 
     pred_labels_all = label_encoder.inverse_transform(pred_encoded_all)
-
+ 
+    adata.obs["baseline_ml_best_model"] = best_model_name
     adata.obs["baseline_ml_predicted_label"] = pd.Categorical(pred_labels_all)
     adata.obs["baseline_ml_prediction_confidence"] = pred_confidence_all
-
-    # Save spot-level predictions for downstream review.
+ 
     prediction_table = adata.obs[
         [
             LABEL_KEY,
             "manual_niche_label_short",
             "manual_label_confidence",
+            "baseline_ml_best_model",
             "baseline_ml_predicted_label",
             "baseline_ml_prediction_confidence",
         ]
     ].copy()
-
-    prediction_table_path = TABLE_DIR / "baseline_ml_spot_predictions.csv"
-    prediction_table.to_csv(prediction_table_path)
-    print(f"Saved spot-level predictions to: {prediction_table_path}")
-
+ 
+    prediction_table.to_csv(
+        TABLE_DIR / "baseline_ml_spot_predictions.csv"
+    )
+ 
     # ------------------------------------------------------------------
-    # 9. Plot predictions and confidence spatially
+    # 8. Plot spatial predictions
     # ------------------------------------------------------------------
-    # Spatial prediction map:
-    #   Shows the model's predicted niche labels across the tissue.
-    sc.pl.spatial(
-        adata,
+    plot_spatial_scatter(
+        adata=adata,
         color=["baseline_ml_predicted_label"],
-        library_id=LIBRARY_ID,
-        show=False,
+        filename="spatial_baseline_ml_predicted_labels.png",
+        img=True,
+        legend_loc="right margin",
     )
-    save_current_fig("spatial_baseline_ml_predicted_labels.png")
-
-    # Spatial confidence map:
-    #   Highlights regions where the model is more or less confident.
-    #   Low-confidence areas may correspond to mixed, transitional, or
-    #   biologically ambiguous tissue regions.
-    sc.pl.spatial(
-        adata,
+ 
+    plot_spatial_scatter(
+        adata=adata,
         color=["baseline_ml_prediction_confidence"],
-        library_id=LIBRARY_ID,
-        show=False,
+        filename="spatial_baseline_ml_prediction_confidence.png",
+        img=True,
+        legend_loc=None,
     )
-    save_current_fig("spatial_baseline_ml_prediction_confidence.png")
-
-    # UMAP comparison:
-    #   Shows manual labels, ML predictions, and prediction confidence in
-    #   expression embedding space.
+ 
     sc.pl.umap(
         adata,
         color=[
@@ -1107,17 +971,15 @@ def main() -> None:
         show=False,
     )
     save_current_fig("umap_manual_vs_ml_predictions.png")
-
+ 
     # ------------------------------------------------------------------
-    # 10. Save prediction-annotated AnnData
+    # 9. Save prediction-annotated object
     # ------------------------------------------------------------------
-    # This output keeps the original labeled object plus model predictions and
-    # prediction confidence scores.
     adata.write_h5ad(OUTPUT_H5AD)
+ 
     print(f"\nSaved prediction-annotated AnnData object to: {OUTPUT_H5AD}")
-
     print("\nMilestone 5 complete.")
-
-
+ 
+ 
 if __name__ == "__main__":
     main()

@@ -13,3 +13,5 @@ models/
 *.cloupe
 *.fastq
 *.fastq.gz
+__pycache__/
+*.py[cod]

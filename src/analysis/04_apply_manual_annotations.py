@@ -1,58 +1,58 @@
 """
-Milestone 4: Apply manually curated biological niche annotations.
+Milestone 3.5: Apply manually curated biological niche annotations.
 
 Purpose
 -------
-This script takes the manually reviewed cluster annotation table and applies
-those annotations back to every Visium spot in the AnnData object.
+This script applies manually curated cluster annotations back to every Visium
+spot in the AnnData object.
 
-This step is important because the previous marker-gene analysis produces
-cluster-level evidence, but the downstream machine learning model needs a
-spot-level label column.
+The previous marker-gene analysis script creates a cluster-level annotation
+template. After manual biological review, this script converts:
 
-In other words, this script converts:
-
-    Leiden cluster -> manually curated biological label
+    Leiden cluster -> curated biological label
 
 into:
 
-    every spatial spot -> manually curated biological niche label
+    every Visium spot -> curated biological niche label
 
 Why this script exists
 ----------------------
-The manual annotation table is the bridge between biological interpretation
-and supervised ML.
+This step is the bridge between biological interpretation and supervised ML.
 
 Before this script:
     - clusters have marker genes
-    - clusters have manually reviewed labels in a CSV file
+    - clusters have suggested labels
+    - manual annotations exist in a CSV file
     - individual spots do not yet have final curated ML labels
 
 After this script:
-    - every spot has a final biological niche label
-    - every spot has a short display label for plotting
-    - every spot has a confidence label
-    - low-confidence clusters are excluded from supervised ML training
+    - every spot has a final manual niche label
+    - every spot has a short display label
+    - every spot has a confidence category
+    - low-confidence/review clusters are excluded from supervised ML training
     - the final labeled AnnData object can be used by modeling scripts
+
+Why Squidpy is used here
+------------------------
+Squidpy is used for spatial visualization and optional spatial-neighborhood
+analysis of the final manual niche labels.
+
+This allows the project to ask:
+
+    Which manually annotated niches are spatially adjacent or enriched near
+    each other?
+
+That is more biologically informative than plotting labels alone.
 
 Input
 -----
-AnnData object from marker gene analysis:
+AnnData object from marker-gene analysis:
 
     data/processed/visium_human_breast_cancer_marker_annotated.h5ad
 
 Manual annotation CSV:
 
     data_manifest/annotations/leiden_r06_manual_cluster_annotations.csv
-
-The manual annotation CSV is expected to contain at least:
-
-    cluster
-    n_spots
-    suggested_label
-    top_10_de_markers
-    manual_label
-    notes
 
 Output
 ------
@@ -66,6 +66,8 @@ Tables:
     results/tables/spot_manual_niche_labels.csv
     results/tables/manual_niche_cluster_summary.csv
     results/tables/ml_training_label_counts.csv
+    results/tables/manual_niche_spatial_neighborhood_enrichment_zscore.csv
+    results/tables/manual_niche_spatial_neighborhood_enrichment_count.csv
 
 Figures:
 
@@ -76,50 +78,44 @@ Analysis notes
 This script intentionally separates biological labels from ML training labels.
 
 For example:
-    manual_niche_label = "Mitochondrial/high oxidative signal, low-confidence"
+
+    manual_niche_label = "Rare neural/Schwann-like or edge-associated, low-confidence"
 
 but:
 
     ml_training_label = "Exclude_low_confidence"
 
-This prevents the baseline ML model from learning labels that were explicitly
-marked as uncertain, mixed, or low-confidence.
+This prevents uncertain or review-needed labels from entering supervised ML
+training.
 
 Alternative choices
 -------------------
 Instead of excluding low-confidence clusters, future workflows could:
 
-    - keep them as a separate "Uncertain/mixed" class
+    - keep them as a separate "Uncertain/review" class
     - merge them into broader parent categories
     - use soft labels or probabilistic labels
-    - weight high-confidence spots more heavily during training
-    - train a first model only on high-confidence labels, then predict labels
-      for excluded regions
-    - create a three-level confidence system instead of binary confidence
+    - use sample weights during training
+    - train on high-confidence labels, then predict uncertain regions
+    - add a manual confidence column instead of keyword-based confidence logic
 """
 
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import pandas as pd
 import scanpy as sc
+import squidpy as sq
 
 
 # ---------------------------------------------------------------------
 # Project paths
 # ---------------------------------------------------------------------
-# This script lives in:
-#   src/analysis/04_apply_manual_annotations.py
-#
-# parents[2] moves from:
-#   src/analysis/ -> src/ -> project root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# Input object produced by:
-#   src/analysis/03_marker_gene_analysis.py
-#
-# This file contains marker gene analysis results and suggested labels, but
-# not yet the final manually curated niche labels.
 INPUT_H5AD = (
     PROJECT_ROOT
     / "data"
@@ -127,11 +123,6 @@ INPUT_H5AD = (
     / "visium_human_breast_cancer_marker_annotated.h5ad"
 )
 
-# Manually curated annotation table.
-#
-# This file is intentionally stored in data_manifest/annotations instead of
-# results/ because it is a human-curated project artifact, not just a generated
-# output. It should be version-controlled.
 MANUAL_ANNOTATION_CSV = (
     PROJECT_ROOT
     / "data_manifest"
@@ -139,9 +130,6 @@ MANUAL_ANNOTATION_CSV = (
     / "leiden_r06_manual_cluster_annotations.csv"
 )
 
-# Final labeled AnnData object.
-#
-# This becomes the main input to the baseline ML model.
 OUTPUT_H5AD = (
     PROJECT_ROOT
     / "data"
@@ -149,7 +137,6 @@ OUTPUT_H5AD = (
     / "visium_human_breast_cancer_final_labeled.h5ad"
 )
 
-# Output folders for figures and summary tables.
 FIGURE_DIR = PROJECT_ROOT / "results" / "figures" / "04_manual_annotations"
 TABLE_DIR = PROJECT_ROOT / "results" / "tables"
 
@@ -158,74 +145,57 @@ TABLE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------
-# Dataset and cluster metadata
+# Dataset metadata
 # ---------------------------------------------------------------------
-# This should match the key in adata.uns["spatial"].
-# Scanpy uses this to find the matching Visium image and scale factors.
 LIBRARY_ID = "Visium_Human_Breast_Cancer"
-
-# Leiden cluster key created in preprocessing.
-# All manual annotations are mapped to spots through this cluster column.
 CLUSTER_KEY = "leiden_r06"
+
+SPATIAL_CONNECTIVITY_KEY = "spatial_connectivities"
 
 
 # ---------------------------------------------------------------------
 # Short labels for plotting and ML readability
 # ---------------------------------------------------------------------
-# The manual labels can be biologically descriptive and long.
-# Short labels make legends, bar plots, confusion matrices, and ML reports
-# easier to read.
+# These short labels correspond to the new 10-cluster Squidpy-enabled run.
 #
 # Why this dictionary is explicit:
-#   - It forces every cluster to have a clean display label.
-#   - It avoids inconsistent spelling across scripts.
-#   - It makes model classes more readable.
-#
-# Alternative:
-#   These short labels could be stored directly in the manual annotation CSV
-#   as a "manual_label_short" column. The current approach keeps the original
-#   manual CSV focused on biological notes and lets this script define the
-#   display/model-friendly labels.
+#   - it prevents inconsistent spelling across scripts
+#   - it makes legends and ML reports easier to read
+#   - it forces every cluster to be intentionally reviewed
 SHORT_LABEL_BY_CLUSTER = {
-    "0": "Myeloid/APC",
-    "1": "B/plasma immune",
-    "2": "Tumor epithelial",
-    "3": "Tumor luminal-like",
-    "4": "Hypoxic/metabolic tumor",
+    "0": "B/plasma immune",
+    "1": "Hypoxic tumor",
+    "2": "Myeloid/APC",
+    "3": "Tumor epithelial",
+    "4": "Luminal stress-like",
     "5": "Mixed epi/stromal",
-    "6": "Mixed epi/stress",
-    "7": "Mitochondrial/high oxidative",
-    "8": "Keratin-high tumor",
-    "9": "Luminal/secretory",
-    "10": "Adipocyte/fat",
-    "11": "Rare epithelial/VTCN1",
+    "6": "Luminal secretory",
+    "7": "Keratin-high tumor",
+    "8": "Rare epithelial/VTCN1",
+    "9": "Rare neural-like",
 }
 
 
 # ---------------------------------------------------------------------
 # Terms used to identify low-confidence or review-needed labels
 # ---------------------------------------------------------------------
-# These terms are searched in the manual label and notes columns.
-# If any term is present, the cluster is marked as low-confidence/review.
+# These terms are searched in the manual_label and notes columns.
 #
-# Why this approach is useful:
-#   - It makes confidence assignment reproducible.
-#   - It allows the manual notes to control whether a label should be used for
-#     ML training.
-#   - It prevents uncertain labels from accidentally entering the supervised
-#     training set.
+# Current behavior:
+#   If any term is present, the cluster is marked as
+#   "low_confidence_or_review" and excluded from supervised ML training.
 #
-# Alternative parameters:
-#   - Add "rare" if all rare clusters should be excluded.
-#   - Add "technical" if suspected technical artifacts are annotated.
-#   - Add "edge" if edge-effect clusters are annotated.
-#   - Use a manual CSV column named "confidence" instead of keyword matching.
+# With the current 10-cluster annotations, this should exclude:
+#   - cluster 5: Mixed epithelial/stromal-like, needs review
+#   - cluster 8: Rare epithelial/immune-checkpoint-associated, needs review
+#   - cluster 9: Rare neural/Schwann-like or edge-associated, low-confidence
 LOW_CONFIDENCE_TERMS = [
     "needs review",
     "low-confidence",
     "uncertain",
     "mixed",
-    "mitochondrial",
+    "interpret cautiously",
+    "exclude from ml",
 ]
 
 
@@ -233,21 +203,11 @@ def save_current_fig(filename: str) -> None:
     """
     Save the active matplotlib figure and close it.
 
-    Parameters
-    ----------
-    filename:
-        Name of the figure file to save inside FIGURE_DIR.
-
     Why this helper exists
     ----------------------
-    Many plotting calls are made in this script. Centralizing the save logic
-    ensures all figures use the same resolution, bounding box behavior, and
-    output directory.
-
-    Alternative parameters:
-        dpi=150  for smaller files
-        dpi=300  for publication/GitHub-quality figures
-        dpi=600  for print-quality figures, but larger files
+    This script generates several plots using Squidpy, Scanpy, and Matplotlib.
+    Centralizing figure saving keeps output resolution and formatting
+    consistent.
     """
     out_path = FIGURE_DIR / filename
     plt.savefig(out_path, dpi=300, bbox_inches="tight")
@@ -255,91 +215,101 @@ def save_current_fig(filename: str) -> None:
     print(f"Saved figure: {out_path}")
 
 
+def plot_spatial_scatter(
+    adata,
+    color,
+    filename: str,
+    img: bool = True,
+    legend_loc: str | None = "right margin",
+    ncols: int = 3,
+    use_raw: bool | None = None,
+) -> None:
+    """
+    Plot spatial data using Squidpy and save the figure.
+
+    Why this helper exists
+    ----------------------
+    Squidpy is now the spatial plotting tool for this project. This wrapper
+    keeps spatial plotting calls consistent and avoids passing unsupported
+    arguments such as `show=False`.
+
+    Parameters
+    ----------
+    color:
+        AnnData `.obs` column, gene name, or list of columns/genes.
+
+    filename:
+        Output filename.
+
+    img:
+        Whether to show the tissue image under the spots.
+
+    legend_loc:
+        Legend location for categorical labels.
+
+    ncols:
+        Number of columns for multi-panel plots.
+
+    use_raw:
+        Whether expression should be read from `adata.raw` for gene plots.
+    """
+    kwargs = {
+        "adata": adata,
+        "color": color,
+        "library_id": LIBRARY_ID,
+        "img": img,
+        "legend_loc": legend_loc,
+        "ncols": ncols,
+    }
+
+    if use_raw is not None:
+        kwargs["use_raw"] = use_raw
+
+    sq.pl.spatial_scatter(**kwargs)
+    save_current_fig(filename)
+
+
 def classify_confidence(label: str, notes: str) -> str:
     """
     Classify whether a manually annotated cluster is high-confidence.
 
-    Parameters
-    ----------
-    label:
-        Manual biological label for the cluster.
-
-    notes:
-        Manual notes explaining the annotation.
-
-    Returns
-    -------
-    str
-        "high_confidence" or "low_confidence_or_review"
-
     Why this function exists
     ------------------------
     The ML model should not be trained on labels that the analyst already
-    flagged as mixed, uncertain, low-confidence, or potentially technical.
+    flagged as mixed, uncertain, low-confidence, or needing review.
 
-    This function converts free-text biological notes into a reproducible
+    This function converts free-text annotation labels/notes into a reproducible
     confidence category.
 
     Alternative approaches
     ----------------------
-    Instead of keyword matching, future versions could use:
-        - an explicit "confidence" column in the annotation CSV
-        - confidence scores such as 0.0 to 1.0
-        - categories such as high, medium, low
-        - manual inclusion/exclusion flags per cluster
+    Future versions could use:
+        - an explicit confidence column in the annotation CSV
+        - numeric confidence scores from 0.0 to 1.0
+        - high/medium/low confidence levels
+        - manual include_in_ml flags
         - class-specific confidence thresholds
     """
-    # Combine label and notes so that either field can flag low confidence.
     text = f"{label} {notes}".lower()
 
-    # If any low-confidence keyword is present, exclude the cluster from the
-    # high-confidence supervised training set.
     if any(term in text for term in LOW_CONFIDENCE_TERMS):
         return "low_confidence_or_review"
 
     return "high_confidence"
 
 
-def main() -> None:
+def validate_inputs(adata, annotations: pd.DataFrame) -> None:
     """
-    Apply manual cluster labels to every Visium spot.
+    Validate that the AnnData object and annotation table match.
 
-    Workflow
-    --------
-    1. Load marker-annotated AnnData object.
-    2. Read manually curated cluster annotation CSV.
-    3. Validate that required annotation columns are present.
-    4. Validate that every Leiden cluster has exactly one annotation.
-    5. Create short labels and confidence labels.
-    6. Create ML training labels that exclude low-confidence clusters.
-    7. Map cluster-level annotations to spot-level labels.
-    8. Save summary tables and plots.
-    9. Save final labeled AnnData object.
+    Why this validation matters
+    ---------------------------
+    Manual labels are cluster-level labels. If the AnnData object has a
+    different set of clusters than the CSV file, labels could be incorrectly
+    assigned or missing.
+
+    This can happen after rerunning preprocessing or changing Leiden resolution.
     """
-    print(f"Loading AnnData object from: {INPUT_H5AD}")
-
-    # Load the object created by marker gene analysis.
-    # This object already contains Leiden clusters and marker-gene outputs.
-    adata = sc.read_h5ad(INPUT_H5AD)
-
-    print("\nLoaded AnnData object:")
-    print(adata)
-
-    print(f"\nReading manual annotations from: {MANUAL_ANNOTATION_CSV}")
-
-    # Read the manually curated CSV.
-    # This file is expected to be version-controlled because it captures the
-    # human biological interpretation of each cluster.
-    annotations = pd.read_csv(MANUAL_ANNOTATION_CSV)
-
-    # ------------------------------------------------------------------
-    # 1. Validate required columns
-    # ------------------------------------------------------------------
-    # These columns are required because the script needs:
-    #   - cluster IDs to map labels back to AnnData
-    #   - manual labels to define biological niches
-    #   - notes to classify low-confidence labels
-    #   - top markers/suggested labels for traceability
     required_columns = [
         "cluster",
         "n_spots",
@@ -353,28 +323,65 @@ def main() -> None:
         col for col in required_columns if col not in annotations.columns
     ]
 
-    # Fail early if the CSV format is wrong.
-    # This prevents silent mislabeling of spots.
     if missing_columns:
-        raise ValueError(f"Missing required columns: {missing_columns}")
+        raise ValueError(f"Missing required annotation columns: {missing_columns}")
 
-    # Standardize cluster IDs to strings.
-    #
-    # Why strings?
-    #   AnnData categorical labels often behave more predictably as strings,
-    #   and dictionary mapping is less error-prone when all cluster IDs share
-    #   the same type.
+    if CLUSTER_KEY not in adata.obs.columns:
+        raise ValueError(f"Could not find {CLUSTER_KEY} in adata.obs")
+
+    clusters_in_adata = set(adata.obs[CLUSTER_KEY].astype(str).unique())
+    clusters_in_annotations = set(annotations["cluster"].astype(str).unique())
+
+    missing_from_annotations = clusters_in_adata - clusters_in_annotations
+    extra_in_annotations = clusters_in_annotations - clusters_in_adata
+
+    if missing_from_annotations:
+        raise ValueError(
+            "Clusters present in AnnData but missing from annotations: "
+            f"{sorted(missing_from_annotations)}"
+        )
+
+    if extra_in_annotations:
+        raise ValueError(
+            "Clusters present in annotations but missing from AnnData: "
+            f"{sorted(extra_in_annotations)}"
+        )
+
+    missing_short_labels = sorted(clusters_in_adata - set(SHORT_LABEL_BY_CLUSTER))
+
+    if missing_short_labels:
+        raise ValueError(
+            f"Missing short labels for clusters: {missing_short_labels}"
+        )
+
+
+def prepare_annotation_table(annotations: pd.DataFrame) -> pd.DataFrame:
+    """
+    Clean the manual annotation table and add derived label columns.
+
+    Added columns
+    -------------
+    manual_label_short:
+        Short label used for plots and ML reports.
+
+    manual_label_confidence:
+        high_confidence or low_confidence_or_review.
+
+    ml_training_label:
+        Final supervised ML label. Low-confidence/review clusters are assigned
+        Exclude_low_confidence.
+
+    Why this step exists
+    --------------------
+    The original manual CSV captures biological reasoning. This cleaned version
+    adds the structured columns needed for plotting and ML.
+    """
+    annotations = annotations.copy()
+
     annotations["cluster"] = annotations["cluster"].astype(str)
-
-    # Replace missing label/note values with empty strings so downstream string
-    # operations are safe.
     annotations["manual_label"] = annotations["manual_label"].fillna("").astype(str)
     annotations["notes"] = annotations["notes"].fillna("").astype(str)
 
-    # ------------------------------------------------------------------
-    # 2. Validate that every cluster has a manual label
-    # ------------------------------------------------------------------
-    # Empty manual labels would lead to unlabeled spots or incorrect ML labels.
     empty_labels = annotations[annotations["manual_label"].str.strip() == ""]
 
     if not empty_labels.empty:
@@ -383,86 +390,15 @@ def main() -> None:
             f"{empty_labels[['cluster', 'manual_label']]}"
         )
 
-    # ------------------------------------------------------------------
-    # 3. Validate agreement between AnnData clusters and annotation CSV
-    # ------------------------------------------------------------------
-    # The annotation CSV should contain exactly the clusters present in AnnData.
-    # This protects against:
-    #   - rerunning Leiden at a different resolution without updating labels
-    #   - missing annotations
-    #   - extra annotations from a previous run
-    clusters_in_adata = set(adata.obs[CLUSTER_KEY].astype(str).unique())
-    clusters_in_annotations = set(annotations["cluster"].unique())
-
-    missing_from_annotations = clusters_in_adata - clusters_in_annotations
-    extra_in_annotations = clusters_in_annotations - clusters_in_adata
-
-    if missing_from_annotations:
-        raise ValueError(
-            f"Clusters present in AnnData but missing from annotations: "
-            f"{sorted(missing_from_annotations)}"
-        )
-
-    if extra_in_annotations:
-        raise ValueError(
-            f"Clusters present in annotations but missing from AnnData: "
-            f"{sorted(extra_in_annotations)}"
-        )
-
-    # ------------------------------------------------------------------
-    # 4. Add short plotting/ML labels
-    # ------------------------------------------------------------------
-    # These are shorter than the full manual labels and therefore better for:
-    #   - plot legends
-    #   - confusion matrices
-    #   - classification reports
-    #   - README figures
     annotations["manual_label_short"] = annotations["cluster"].map(
         SHORT_LABEL_BY_CLUSTER
     )
 
-    # Fail if any cluster lacks a short label.
-    # This forces the analyst to consciously decide how each cluster should be
-    # represented in plots and ML outputs.
-    missing_short_labels = annotations[
-        annotations["manual_label_short"].isna()
-    ]["cluster"].tolist()
-
-    if missing_short_labels:
-        raise ValueError(
-            f"Missing short labels for clusters: {missing_short_labels}"
-        )
-
-    # ------------------------------------------------------------------
-    # 5. Add confidence labels
-    # ------------------------------------------------------------------
-    # Confidence is assigned from the manual label and notes text.
-    # This is used to decide whether a cluster should be included in the
-    # supervised ML training set.
     annotations["manual_label_confidence"] = annotations.apply(
-        lambda row: classify_confidence(
-            row["manual_label"],
-            row["notes"],
-        ),
+        lambda row: classify_confidence(row["manual_label"], row["notes"]),
         axis=1,
     )
 
-    # ------------------------------------------------------------------
-    # 6. Create ML training labels
-    # ------------------------------------------------------------------
-    # High-confidence clusters keep their short biological label.
-    # Low-confidence/review clusters are grouped as Exclude_low_confidence.
-    #
-    # Why exclude low-confidence labels?
-    #   The first ML model should learn from labels that are biologically
-    #   defensible. Training on uncertain labels could make performance look
-    #   better while reducing scientific validity.
-    #
-    # Alternative approaches:
-    #   - Keep uncertain clusters as an "Uncertain" class.
-    #   - Collapse mixed clusters into broader labels.
-    #   - Use sample weights to downweight uncertain clusters.
-    #   - Train a semi-supervised model using high-confidence labels only.
     annotations["ml_training_label"] = annotations.apply(
         lambda row: (
             row["manual_label_short"]
@@ -472,38 +408,24 @@ def main() -> None:
         axis=1,
     )
 
-    print("\nManual annotation table:")
-    print(
-        annotations[
-            [
-                "cluster",
-                "n_spots",
-                "manual_label",
-                "manual_label_short",
-                "manual_label_confidence",
-                "ml_training_label",
-            ]
-        ]
-    )
+    return annotations
 
-    # ------------------------------------------------------------------
-    # 7. Save cleaned annotation table
-    # ------------------------------------------------------------------
-    # This table captures the final interpreted cluster labels after adding
-    # short labels, confidence categories, and ML training labels.
-    cleaned_annotation_path = (
-        TABLE_DIR / "leiden_r06_manual_cluster_annotations_cleaned.csv"
-    )
-    annotations.to_csv(cleaned_annotation_path, index=False)
-    print(f"\nSaved cleaned annotation table to: {cleaned_annotation_path}")
 
-    # ------------------------------------------------------------------
-    # 8. Build mapping dictionaries
-    # ------------------------------------------------------------------
-    # These dictionaries map:
-    #   cluster ID -> annotation field
-    #
-    # They are used to propagate cluster-level annotations to every spot.
+def apply_annotations_to_spots(adata, annotations: pd.DataFrame):
+    """
+    Map cluster-level annotations to every spot in AnnData.
+
+    Why this function exists
+    ------------------------
+    Manual labels are curated at the cluster level, but ML training and spatial
+    plotting require spot-level labels.
+
+    This function propagates:
+
+        cluster -> manual niche label
+
+    to every spot in that cluster.
+    """
     cluster_to_label = dict(
         zip(annotations["cluster"], annotations["manual_label"])
     )
@@ -520,30 +442,8 @@ def main() -> None:
         zip(annotations["cluster"], annotations["notes"])
     )
 
-    # Convert the AnnData cluster column to string so it matches dictionary keys.
     cluster_ids = adata.obs[CLUSTER_KEY].astype(str)
 
-    # ------------------------------------------------------------------
-    # 9. Add spot-level annotation columns to AnnData
-    # ------------------------------------------------------------------
-    # Every spot gets the annotation assigned to its Leiden cluster.
-    #
-    # These columns serve different downstream purposes:
-    #
-    # manual_niche_label:
-    #   Full biological label.
-    #
-    # manual_niche_label_short:
-    #   Short label for plots and ML classes.
-    #
-    # manual_label_confidence:
-    #   Whether the label is high-confidence or should be reviewed/excluded.
-    #
-    # ml_training_label:
-    #   Final target label used by ML scripts.
-    #
-    # manual_annotation_notes:
-    #   Biological reasoning from the annotation table.
     adata.obs["manual_niche_label"] = (
         cluster_ids.map(cluster_to_label).astype("category")
     )
@@ -564,19 +464,28 @@ def main() -> None:
         cluster_ids.map(cluster_to_notes).astype(str)
     )
 
-    # Combined cluster + short label is useful for plots where preserving the
-    # original Leiden cluster ID matters.
     adata.obs["cluster_manual_niche_label"] = (
         cluster_ids + ": " + adata.obs["manual_niche_label_short"].astype(str)
     ).astype("category")
 
-    # ------------------------------------------------------------------
-    # 10. Save spot-level label table
-    # ------------------------------------------------------------------
-    # This table is useful for:
-    #   - debugging label propagation
-    #   - checking ML target labels
-    #   - linking every spot barcode to its final biological annotation
+    return adata
+
+
+def save_summary_tables(adata, annotations: pd.DataFrame) -> None:
+    """
+    Save cluster-level, spot-level, and ML-label summary tables.
+
+    Why these tables matter
+    -----------------------
+    They make the annotation process transparent and allow downstream scripts to
+    verify which labels were used for ML training.
+    """
+    cleaned_annotation_path = (
+        TABLE_DIR / "leiden_r06_manual_cluster_annotations_cleaned.csv"
+    )
+    annotations.to_csv(cleaned_annotation_path, index=False)
+    print(f"Saved cleaned annotation table to: {cleaned_annotation_path}")
+
     spot_label_table = adata.obs[
         [
             CLUSTER_KEY,
@@ -593,16 +502,6 @@ def main() -> None:
     spot_label_table.to_csv(spot_label_path)
     print(f"Saved spot-level labels to: {spot_label_path}")
 
-    # ------------------------------------------------------------------
-    # 11. Save cluster-level summary table
-    # ------------------------------------------------------------------
-    # This table summarizes how many spots belong to each manually annotated
-    # niche. It is useful for README summaries and for diagnosing class
-    # imbalance before ML modeling.
-    #
-    # Alternative:
-    #   Add percentages by dividing n_spots by total spots.
-    #   Add high-confidence-only summaries for ML-specific reporting.
     cluster_summary = (
         adata.obs[
             [
@@ -635,15 +534,6 @@ def main() -> None:
     print("\nCluster summary:")
     print(cluster_summary)
 
-    # ------------------------------------------------------------------
-    # 12. Save ML training label counts
-    # ------------------------------------------------------------------
-    # This shows how many spots will be available for each model class.
-    #
-    # Why this matters:
-    #   Class imbalance affects model performance, confusion matrices, and the
-    #   interpretation of accuracy. Macro F1 is later used because it treats
-    #   classes more equally than raw accuracy.
     ml_counts = (
         adata.obs["ml_training_label"]
         .value_counts()
@@ -658,34 +548,124 @@ def main() -> None:
     print("\nML training label counts:")
     print(ml_counts)
 
-    # ------------------------------------------------------------------
-    # 13. Figures: spatial and UMAP label inspection
-    # ------------------------------------------------------------------
-    # These plots confirm whether manual labels:
-    #   - form coherent tissue regions
-    #   - align with UMAP/expression structure
-    #   - identify which regions were excluded from ML training
-    #
-    # Alternative plotting choices:
-    #   - use Squidpy spatial plotting if available
-    #   - generate one figure per label for publication-style panels
-    #   - save SVG/PDF versions for vector graphics
-    #   - adjust spot size/alpha for dense plots
-    sc.pl.spatial(
+
+def run_manual_label_neighborhood_enrichment(adata) -> None:
+    """
+    Run Squidpy neighborhood enrichment on manual niche labels.
+
+    Why this analysis is useful
+    ---------------------------
+    This asks whether manually annotated biological niches are spatially
+    adjacent more often than expected by chance.
+
+    This can support biological interpretation, for example:
+
+        - hypoxic tumor regions near tumor epithelial regions
+        - immune niches enriched near tumor-associated tissue
+        - adipose/edge-like regions separated from core tumor regions
+
+    Important note
+    --------------
+    Low-confidence labels are still included in this spatial analysis because
+    spatial context can help interpret uncertain regions. They are excluded only
+    from supervised ML training.
+    """
+    if SPATIAL_CONNECTIVITY_KEY not in adata.obsp:
+        print(
+            f"\nSkipping manual label neighborhood enrichment: "
+            f"{SPATIAL_CONNECTIVITY_KEY} not found in adata.obsp."
+        )
+        return
+
+    print("\nRunning Squidpy neighborhood enrichment for manual niche labels...")
+
+    label_key = "manual_niche_label_short"
+    adata.obs[label_key] = adata.obs[label_key].astype("category")
+
+    sq.gr.nhood_enrichment(
+        adata,
+        cluster_key=label_key,
+        n_perms=1000,
+        seed=42,
+        n_jobs=1,
+        show_progress_bar=True,
+    )
+
+    result_key = f"{label_key}_nhood_enrichment"
+
+    if result_key not in adata.uns:
+        print(f"Warning: expected {result_key} in adata.uns but did not find it.")
+        return
+
+    enrichment = adata.uns[result_key]
+    categories = adata.obs[label_key].cat.categories.astype(str).tolist()
+
+    if "zscore" in enrichment:
+        zscore_df = pd.DataFrame(
+            enrichment["zscore"],
+            index=categories,
+            columns=categories,
+        )
+        zscore_path = (
+            TABLE_DIR / "manual_niche_spatial_neighborhood_enrichment_zscore.csv"
+        )
+        zscore_df.to_csv(zscore_path)
+        print(f"Saved manual niche neighborhood z-scores to: {zscore_path}")
+
+    if "count" in enrichment:
+        count_df = pd.DataFrame(
+            enrichment["count"],
+            index=categories,
+            columns=categories,
+        )
+        count_path = (
+            TABLE_DIR / "manual_niche_spatial_neighborhood_enrichment_count.csv"
+        )
+        count_df.to_csv(count_path)
+        print(f"Saved manual niche neighborhood counts to: {count_path}")
+
+    sq.pl.nhood_enrichment(
+        adata,
+        cluster_key=label_key,
+        annotate=True,
+        method="average",
+        figsize=(9, 9),
+    )
+    save_current_fig("manual_niche_spatial_neighborhood_enrichment.png")
+
+
+def plot_annotation_outputs(adata) -> None:
+    """
+    Generate spatial, UMAP, and label-count plots.
+
+    Why these plots are included
+    ----------------------------
+    These figures confirm whether manual labels are spatially coherent, whether
+    low-confidence labels are localized, and how much data will be used for ML.
+    """
+    plot_spatial_scatter(
         adata,
         color=["cluster_manual_niche_label"],
-        library_id=LIBRARY_ID,
-        show=False,
+        filename="spatial_cluster_manual_niche_labels.png",
+        img=True,
+        legend_loc="right margin",
     )
-    save_current_fig("spatial_cluster_manual_niche_labels.png")
 
-    sc.pl.spatial(
+    plot_spatial_scatter(
         adata,
         color=["manual_niche_label_short"],
-        library_id=LIBRARY_ID,
-        show=False,
+        filename="spatial_manual_niche_labels_short.png",
+        img=True,
+        legend_loc="right margin",
     )
-    save_current_fig("spatial_manual_niche_labels_short.png")
+
+    plot_spatial_scatter(
+        adata,
+        color=["manual_label_confidence"],
+        filename="spatial_manual_label_confidence.png",
+        img=True,
+        legend_loc="right margin",
+    )
 
     sc.pl.umap(
         adata,
@@ -704,21 +684,6 @@ def main() -> None:
     )
     save_current_fig("umap_manual_label_confidence.png")
 
-    sc.pl.spatial(
-        adata,
-        color=["manual_label_confidence"],
-        library_id=LIBRARY_ID,
-        show=False,
-    )
-    save_current_fig("spatial_manual_label_confidence.png")
-
-    # ------------------------------------------------------------------
-    # 14. Figure: manual niche label counts
-    # ------------------------------------------------------------------
-    # Bar plots make class imbalance easy to inspect.
-    #
-    # Why horizontal bars?
-    #   Labels can be long, and horizontal bars are more readable.
     label_counts = (
         adata.obs["manual_niche_label_short"]
         .value_counts()
@@ -732,11 +697,6 @@ def main() -> None:
     ax.set_title("Manual niche label counts")
     save_current_fig("manual_niche_label_counts.png")
 
-    # ------------------------------------------------------------------
-    # 15. Figure: ML training label counts
-    # ------------------------------------------------------------------
-    # This plot explicitly shows which labels will be used for training and how
-    # many spots are excluded as low-confidence.
     ml_label_counts = (
         adata.obs["ml_training_label"]
         .value_counts()
@@ -750,19 +710,62 @@ def main() -> None:
     ax.set_title("ML training label counts")
     save_current_fig("ml_training_label_counts.png")
 
-    # ------------------------------------------------------------------
-    # 16. Save final labeled AnnData object
-    # ------------------------------------------------------------------
-    # This object is the main input for:
-    #   src/modeling/05_train_baseline_niche_classifier.py
-    #   src/modeling/06_spatial_holdout_validation.py
-    #
-    # It preserves the expression data, embeddings, spatial information, and
-    # final labels needed for ML.
+
+def main() -> None:
+    """
+    Apply manual annotations to the marker-annotated AnnData object.
+
+    Workflow
+    --------
+    1. Load marker-annotated AnnData object.
+    2. Load manual annotation CSV.
+    3. Validate that annotation clusters match AnnData clusters.
+    4. Add short labels, confidence labels, and ML training labels.
+    5. Map cluster-level annotations to every spot.
+    6. Save summary tables.
+    7. Run Squidpy neighborhood enrichment on manual labels.
+    8. Save spatial, UMAP, and count plots.
+    9. Save final labeled AnnData object.
+    """
+    print(f"Loading AnnData object from: {INPUT_H5AD}")
+    adata = sc.read_h5ad(INPUT_H5AD)
+
+    print("\nLoaded AnnData object:")
+    print(adata)
+
+    print(f"\nReading manual annotations from: {MANUAL_ANNOTATION_CSV}")
+    annotations = pd.read_csv(MANUAL_ANNOTATION_CSV)
+
+    validate_inputs(adata, annotations)
+
+    annotations = prepare_annotation_table(annotations)
+
+    print("\nManual annotation table:")
+    print(
+        annotations[
+            [
+                "cluster",
+                "n_spots",
+                "manual_label",
+                "manual_label_short",
+                "manual_label_confidence",
+                "ml_training_label",
+            ]
+        ]
+    )
+
+    adata = apply_annotations_to_spots(adata, annotations)
+
+    save_summary_tables(adata, annotations)
+
+    run_manual_label_neighborhood_enrichment(adata)
+
+    plot_annotation_outputs(adata)
+
     adata.write_h5ad(OUTPUT_H5AD)
 
     print(f"\nSaved final labeled AnnData object to: {OUTPUT_H5AD}")
-    print("\nMilestone 4 complete.")
+    print("\nMilestone 3.5 complete.")
 
 
 if __name__ == "__main__":
