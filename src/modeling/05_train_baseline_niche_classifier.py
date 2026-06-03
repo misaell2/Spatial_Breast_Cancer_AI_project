@@ -1,5 +1,5 @@
 """
-Milestone 4: Train baseline ML models for spatial niche classification.
+Milestone 5: Train baseline ML models for spatial niche classification.
 
 Purpose
 -------
@@ -1116,7 +1116,7 @@ def main() -> None:
     adata.write_h5ad(OUTPUT_H5AD)
     print(f"\nSaved prediction-annotated AnnData object to: {OUTPUT_H5AD}")
 
-    print("\nMilestone 4 complete.")
+    print("\nMilestone 5 complete.")
 
 
 if __name__ == "__main__":
