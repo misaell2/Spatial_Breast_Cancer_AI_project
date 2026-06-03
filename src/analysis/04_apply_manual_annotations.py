@@ -1,5 +1,5 @@
 """
-Milestone 3.5: Apply manually curated biological niche annotations.
+Milestone 4: Apply manually curated biological niche annotations.
 
 Purpose
 -------
@@ -762,7 +762,7 @@ def main() -> None:
     adata.write_h5ad(OUTPUT_H5AD)
 
     print(f"\nSaved final labeled AnnData object to: {OUTPUT_H5AD}")
-    print("\nMilestone 3.5 complete.")
+    print("\nMilestone 4 complete.")
 
 
 if __name__ == "__main__":
