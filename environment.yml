@@ -4,18 +4,32 @@ channels:
   - conda-forge
 
 dependencies:
-  - python=3.10
+  # Core Python
+  - python=3.11
+  - pip
+
+  # Spatial transcriptomics / single-cell ecosystem
   - scanpy
+  - squidpy
   - anndata
+  - leidenalg
+  - python-igraph
+  - umap-learn
+
+  # Data science
   - pandas
   - numpy
   - scipy
   - scikit-learn
+  - h5py
+  - joblib
+
+  # Plotting and image support
   - matplotlib
   - seaborn
-  - h5py
   - pillow
-  - leidenalg
-  - python-igraph
-  - joblib
-  - pip
+  - scikit-image
+
+  # Optional but useful for notebooks/debugging
+  - jupyterlab
+  - ipykernel
