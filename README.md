@@ -498,11 +498,8 @@ Planned or in-progress extensions include:
 
 - cross-section validation using additional 10x breast cancer Block A sections
 - pathway enrichment analysis
-- single-cell reference deconvolution
-- comparison to published spatial-domain methods
-- TCGA-BRCA signature comparison
-- optional H&E image feature extraction
-- optional custom ML model or graph-based spatial model
+- Find better quality datasets (Visium HD, etc.)
+- custom ML model or graph-based spatial model
 
 ---
 
@@ -542,14 +539,6 @@ SpaceMarkers: molecular interaction analysis from spatial transcriptomics.
 
 ```text
 https://www.sciencedirect.com/science/article/pii/S2405471223000807
-```
-
-### Future validation resource
-
-TCGA-BRCA project page.
-
-```text
-https://portal.gdc.cancer.gov/projects/TCGA-BRCA
 ```
 
 ---
