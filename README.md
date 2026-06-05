@@ -88,8 +88,6 @@ Low-confidence, rare, mixed, or review-needed regions were not treated as strong
 
 Leiden clusters were interpreted using differential expression, known breast cancer and tumor microenvironment marker genes, spatial localization, Moran's I spatial autocorrelation, Squidpy neighborhood analysis, and manual biological review.
 
-![Top differential markers per cluster](docs/figures/rank_genes_groups_top5_per_cluster.png)
-
 Representative marker evidence included:
 
 | Niche | Supporting markers |
@@ -109,8 +107,6 @@ Representative marker evidence included:
 ## Spatial Gene Interpretation
 
 Spatial localization was essential for interpretation. Genes were not interpreted only by whether they were expressed, but also by **where** they were expressed relative to tumor, immune, stromal, adipose, and hypoxic/metabolic regions.
-
-![Selected biological marker genes](docs/figures/spatial_selected_biological_markers.png)
 
 ![Spatially autocorrelated marker genes](docs/figures/spatial_top_morans_i_marker_genes.png)
 
