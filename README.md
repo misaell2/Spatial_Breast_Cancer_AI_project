@@ -1,24 +1,20 @@
 # SpatialNicheAI: Interpretable ML for breast cancer spatial transcriptomics
 
-SpatialNicheAI is a reproducible bioinformatics and machine learning project for analyzing breast cancer spatial transcriptomics data. The project uses public 10x Genomics Visium data to identify spatially organized tumor microenvironment niches, interpret them using marker genes and spatial localization, and train interpretable machine learning models to classify those niches.
+SpatialNicheAI is a reproducible bioinformatics and machine learning project for analyzing breast cancer spatial transcriptomics data. The project is divided into two parts, bioinformatics then machine learning. First, I identify spatially organized tumor microenvironment niches then interpret them using marker genes and spatial localization. Then second, train interpretable machine learning models to classify those niches.
 
 The central goal is not only to cluster spots, but to ask:
 
-> What biological regions exist in this breast cancer tissue, where are they located, and can machine learning learn these spatial niche identities from expression-derived and spatial-context features?
+> 1) What biological regions exist in this breast cancer tissue?
+> 2) Can machine learning learn these spatial niche identities from expression-derived and spatial-context features?
 
 ---
 
-## Biological Questions
-
-This project asks:
+## Biological Questions, before analysis
 
 1. **What spatially distinct tumor and microenvironment niches are present in this breast cancer tissue section?**
-2. **Which marker genes define epithelial tumor, luminal/secretory, immune, stromal, adipose, and hypoxic/metabolic regions?**
-3. **Are hypoxic/metabolic tumor-like regions spatially connected to tumor epithelial regions?**
-4. **Are immune niches localized near tumor regions, excluded from them, or organized into separate compartments?**
-5. **Can manually interpreted spatial niches be learned by supervised machine learning models?**
-6. **Does model performance remain strong when entire tissue regions are held out during validation?**
-
+2. **Which marker genes define epithelial tumor, immune, metabolic, and other relevant regions?**
+3. **Are immune niches localized near tumor regions, excluded from them, or organized into separate compartments? (How does the immune system respond?)**
+4. **Are tumor epithelial regions spatially homogenous, or do they seperate into distinct epithelial states?** 
 ---
 
 ## Dataset
@@ -136,7 +132,7 @@ This region is supported by glycolysis and stress-associated genes such as `GAPD
 
 `GAPDH` and `PGK1` were interpreted cautiously. Although they are glycolytic genes and can be broadly expressed, cancer literature supports that they can become biologically meaningful when enriched together with other hypoxia, glycolysis, epithelial, or stress markers. In this project, the spatial co-localization of glycolytic markers near tumor epithelial regions supports the interpretation of a metabolically remodeled tumor niche.
 
-A careful biological hypothesis is:
+Hypothesis:
 
 > The hypoxic/metabolic tumor region may represent tumor epithelial cells adapting to local oxygen limitation, nutrient stress, or increased glycolytic demand.
 
@@ -150,7 +146,7 @@ The **luminal/secretory** region appears prominently in the upper-right portion 
 
 `SCGB2A2`, also known as mammaglobin, supports a mammary/luminal secretory epithelial program. In the spatial marker maps, `SCGB2A2` and `SCGB1D2` are enriched in spatially defined epithelial regions rather than uniformly across the whole tissue. This supports the interpretation of a localized luminal/secretory epithelial compartment.
 
-A careful biological hypothesis is:
+Hypothesis:
 
 > The luminal/secretory region may represent a differentiated mammary epithelial or luminal tumor-associated program that is spatially distinct from the more hypoxic/metabolic tumor region.
 
@@ -162,7 +158,7 @@ Spatially, the B/plasma-cell signal is especially prominent in central and upper
 
 `IGKC` was interpreted as a B-cell/plasma-cell marker because it encodes an immunoglobulin kappa light-chain constant region. Its interpretation is strongest when it appears together with immunoglobulin heavy-chain genes, lambda-chain genes, `JCHAIN`, and plasma-cell-associated markers.
 
-A careful biological hypothesis is:
+Hypothesis:
 
 > B/plasma-cell-enriched regions may represent local humoral immune niches within or near the tumor microenvironment. Their proximity to tumor epithelial or myeloid/APC regions may suggest local tumor-immune interaction or antigen-driven immune organization.
 
@@ -176,7 +172,7 @@ The **Myeloid/APC** niche is broadly distributed through central and upper tissu
 
 Spatially, myeloid/APC signal overlaps or lies near several epithelial and immune regions, suggesting that antigen-presenting cells may be part of tumor-immune interface zones. However, these markers alone do not define macrophage polarization state. Additional markers would be needed to distinguish inflammatory macrophages, immunosuppressive macrophages, dendritic cells, or other antigen-presenting populations.
 
-A careful biological hypothesis is:
+Hypothesis:
 
 > Myeloid/APC-enriched regions may represent antigen-presenting immune compartments positioned near tumor and B/plasma-cell regions, potentially marking sites of tumor-immune communication.
 
@@ -201,19 +197,18 @@ These regions may represent real biological transitional states, spot-level cell
 
 ---
 
-## Integrated Biological Hypothesis
+## Biological conclusions
 
-The spatial transcriptomics results support the following biological model:
+1. **What spatially distinct tumor and microenvironment niches are present in this breast cancer tissue section?**  
+   The tissue contains multiple spatially organized niches. These niches are not randomly scattered; they form coherent spatial compartments across the tissue.
 
-1. The tissue contains organized epithelial tumor compartments marked by keratins, `MUC1`, and epithelial markers.
-2. A compact keratin-high tumor region is present near the central-right/lower-middle tissue area, suggesting a distinct epithelial tumor state.
-3. A hypoxic/metabolic tumor-like region is enriched toward the lower-left/lower-middle tissue area, near tumor epithelial and tumor luminal-like regions, suggesting localized tumor metabolic stress.
-4. Luminal/secretory epithelial programs are enriched toward the upper-right region, suggesting spatial separation between differentiated luminal-like epithelial states and hypoxic/metabolic tumor states.
-5. B/plasma-cell immune regions and myeloid/APC regions are spatially organized, suggesting immune niches rather than diffuse immune contamination.
-6. Myeloid/APC and B/plasma-cell regions may represent tumor-immune interface zones, especially where they are adjacent to epithelial tumor regions.
-7. Stromal and adipose-associated regions provide tissue architecture and may mark tumor-adjacent microenvironmental compartments.
+2. **Are immune niches localized near tumor regions, excluded from them, or organized into separate compartments? How does the immune system respond?**  
+   The immune signal is spatially organized rather than diffuse. Myeloid/APC and B/plasma-cell regions appear as distinct immune-enriched compartments, with some regions positioned near epithelial tumor and mixed tumor-associated areas. This suggests a localized tumor-immune microenvironment that may include antigen presentation and humoral immune activity. However, the current analysis does not prove whether the immune response is anti-tumor, immunosuppressive, or ineffective; it shows where immune-associated programs are spatially enriched.
 
-Overall, the tissue appears to contain spatially organized tumor, immune, metabolic, luminal, stromal, and adipose compartments. This supports the broader interpretation that breast cancer tissue architecture is spatially heterogeneous and that spatial transcriptomics can reveal biologically meaningful tumor microenvironment structure.
+3. **Are tumor epithelial regions spatially homogeneous, or do they separate into distinct epithelial states?**  
+   Tumor epithelial regions are not spatially homogeneous. The analysis separates epithelial/tumor-associated regions into multiple states, including tumor epithelial, keratin-high tumor, tumor luminal-like, luminal/secretory, mixed epithelial/stress, and hypoxic/metabolic tumor-like regions. This suggests that the tumor compartment contains distinct epithelial programs, including differentiated luminal/secretory states and metabolically stressed tumor-like states.
+
+Overall, the results support the conclusion that this breast cancer tissue section contains spatially organized tumor, immune, metabolic, luminal, stromal, and adipose-associated compartments.
 
 ---
 
