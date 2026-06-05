@@ -1,8 +1,8 @@
 # SpatialNicheAI: Interpretable ML for breast cancer spatial transcriptomics
 
-SpatialNicheAI is a reproducible bioinformatics and machine learning project for analyzing breast cancer spatial transcriptomics data. The project is divided into two parts; bioinformatics and machine learning. First, I identify spatially organized tumor microenvironment niches then interpret them using marker genes and spatial localization. Then second, train interpretable machine learning models to classify those niches.
+SpatialNicheAI is a reproducible bioinformatics and machine learning project for analyzing breast cancer spatial transcriptomics data. The project is divided into two parts; bioinformatics and machine learning. 
 
-The central goal is not only to cluster spots, but to ask:
+The birds eye view of the project:
 
 > 1) What biological regions exist in this breast cancer tissue?
 > 2) Can machine learning learn these spatial niche identities from expression-derived and spatial-context features?
