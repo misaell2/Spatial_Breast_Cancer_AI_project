@@ -190,6 +190,7 @@ Some regions were labeled as mixed, rare, or low-confidence. Examples include:
 - Rare epithelial/VTCN1
 
 These regions may represent real biological transitional states, spot-level cell mixing, tissue edges, technical artifacts, or rare populations. They were interpreted cautiously and were excluded from high-confidence supervised ML training when appropriate.
+![Low confidence](docs/figures/02_spatial_manual_label_confidence.png)
 
 ---
 
