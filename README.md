@@ -551,6 +551,12 @@ This repository is released under the MIT License.
 Users are responsible for complying with the terms of use of any external datasets analyzed with this code.
 
 ---
+## AI-Assisted Development
+
+I used AI tools as part of the development process for this project, primarily to support code, debugging, documentation, workflow organization, and brainstorming analysis strategies. All biological interpretation, dataset selection, pipeline design decisions, model evaluation choices, and final conclusions were reviewed and curated by me.
+
+AI assistance was treated as a productivity and learning aid, not as a replacement for domain expertise. Results were validated through reproducible code, manual biological review, marker-gene interpretation, spatial visualization, and model evaluation.
+---
 
 ## Author
 
